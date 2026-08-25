@@ -287,6 +287,46 @@ been made yet. Not bugs — just don't assume any of these are "done."
   conditions (empty ticket file, non-matching branch), confirmed the
   commit now blocks cleanly with no file written.
 
+## Smaller items, tackled lowest-risk-first (2026-08-25)
+- [x] **Co-author commit template — done.** `.gitmessage` pre-fills a
+      `Co-authored-by:` line, wired via `git config commit.template
+      .gitmessage` (documented in `README.md`'s one-time setup).
+- [x] **Bug found while testing the template, unrelated to the template
+      itself — fixed.** `commit-msg` unconditionally appended the
+      Kiro-Session/Kiro-Credits trailers regardless of whether the user's
+      actual message was empty. Git's own "abort on empty message" check
+      runs AFTER `commit-msg`, using whatever it produces — so a blank or
+      comments-only editor buffer (nothing typed, or a template left
+      unfilled) still "succeeded," with a commit whose only content was
+      those two trailer lines. Confirmed this happens even with
+      `commit.template` unset — a pre-existing bug the template happened
+      to expose, not caused by it. Reproduced twice for real (two
+      accidental commits, both undone). Fixed: `commit-msg` now checks
+      for real content before touching the file, leaving it alone
+      otherwise so git's own check still fires. Tested both paths after
+      the fix.
+- [x] **Consent check baked into every hook — done.** `pre-commit` now
+      checks a per-USER marker (`~/.kiro-tracking-consent-ack`, not
+      per-repo — consent is about the person) before anything else, even
+      gitleaks. Missing/unacknowledged → shows the tracking notice and
+      requires typing `I agree` exactly, blocking the commit otherwise
+      (same posture as gitleaks — fail closed, not a warning). Versioned
+      (`v1`) so a future change to what's tracked can force a re-prompt.
+      Closes the original gap: a dev committing through plain git, never
+      opening Kiro's UI at all, could never have been shown the notice
+      before. Tested: blocked with no input (confirmed, real commit
+      attempt), then confirmed the "already consented" path correctly
+      skips the prompt once the marker exists. **One real environment
+      limit hit while testing, not a bug:** couldn't fully exercise the
+      live `read -p` "type I agree" flow itself — piping input to `git
+      commit` doesn't reach the hook's stdin in this sandboxed setup
+      (same limitation as the original ticket-ID prompt, noted earlier
+      today), so the marker-exists path was tested by writing the marker
+      directly rather than typing through the actual prompt. The prompt
+      logic itself is simple bash (`read -p` + string compare) with low
+      risk of hidden behavior, but worth a real human running through it
+      once in an actual terminal before fully trusting it.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`

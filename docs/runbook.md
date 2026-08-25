@@ -135,6 +135,29 @@ fi
 **Who makes it:** you, one time. **This is the most important file — it writes the actual tracking record.**
 ```bash
 #!/bin/bash
+# 0. Consent check — must happen before any tracking activity at all,
+# before even gitleaks, since the point is "seen the notice before being
+# tracked," not "seen it before being tracked, unless this particular
+# commit happens to be clean." A per-USER marker (not per-repo), since
+# consent is about the person, not any one project — versioned so a
+# future change to what's tracked can force a re-prompt by bumping it.
+CONSENT_VERSION="v1"
+CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
+if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
+  echo "" >&2
+  echo "📋 This project tracks Kiro AI usage and credit spend per commit," >&2
+  echo "   linked to your Jira ticket and git identity (see docs/runbook.md" >&2
+  echo "   section 6 for exactly what's recorded, section 7 for who sees it)." >&2
+  echo "" >&2
+  read -p "Type 'I agree' to continue (required once per machine): " CONSENT_ANSWER
+  if [ "$CONSENT_ANSWER" != "I agree" ]; then
+    echo "❌ Commit blocked — consent not given. Re-run and type 'I agree' exactly to proceed." >&2
+    exit 1
+  fi
+  echo "$CONSENT_VERSION|$(date -u +%Y-%m-%dT%H:%M:%SZ)|$(git config user.email)" > "$CONSENT_FILE"
+  echo "✅ Consent recorded at $CONSENT_FILE — won't ask again unless this notice changes." >&2
+fi
+
 # 1. Check for passwords/keys first — stops the commit if it finds any
 gitleaks protect --staged || exit 1
 
@@ -560,7 +583,12 @@ Every commit writes this (see section 1 for the full script):
 ---
 
 ## 7. What still needs a real person, not a script
-- Getting legal's OK on what's tracked, before turning this on
+- Getting legal's OK on what's tracked, before turning this on — the
+  *decision* of what's acceptable to track still needs a person; only the
+  mechanical "did every dev actually see the notice" part is now enforced
+  by `pre-commit`'s consent check (§1, `.githooks/pre-commit`) rather than
+  living solely in Kiro's own first-run screen, which a dev committing
+  through plain git would never see
 - Deciding what "good" usage looks like, and treating low numbers as
   a conversation, not an automatic punishment
 - Reviewing changes to these hook files like real code before merging them
