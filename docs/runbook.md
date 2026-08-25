@@ -144,6 +144,29 @@ entries.)
 **Where the credit number actually comes from:** `~/.config/Kiro/User/globalStorage/state.vscdb` is a SQLite file (local, no network call). Its `ItemTable` has a row keyed `kiro.kiroAgent` whose value is a JSON blob containing `"kiro.resourceNotifications.usageState"` — an account-level running total that climbs across every session and resets monthly. The number is a decimal (e.g. `229.72`), not an integer — any delta math against it has to account for that.
 **Caveat worth keeping in mind:** this total is account-wide, not per-ticket — it only becomes a per-ticket number by taking a delta between two snapshots (baseline at ticket start, current at commit time). If a dev switches which ticket they're working on without switching git branch (so `post-checkout` never clears `current-ticket.json`), the delta for both tickets blends together. The hook instruction above is written to catch this by confirming before it overwrites an existing baseline.
 
+### `.kiro/hooks/aidlc-bootstrap-git-hooks.json`
+**Who makes it:** you, one time — same as the ask-for-ticket hook above (hand-written, same schema, picked up by Kiro automatically).
+**What it does:** checks whether this repo's git hooks are actually live on *this* machine — both `.githooks/pre-commit` existing AND `git config core.hooksPath` already equal to `.githooks` have to be true, since the files can exist while a fresh clone still hasn't pointed git at them. If either is missing, it recreates all four `.githooks/` scripts (`pre-commit`, `post-checkout`, `commit-msg`, `pre-push`) from what's already committed elsewhere in the repo's history rather than rewriting them from scratch — the real scripts carry fixes for bugs found by testing (see `TODO.md`) that a reinvented version would silently reintroduce — then `chmod +x`s them and runs `git config core.hooksPath .githooks`. This is what makes "clone the repo, hooks just work" true instead of relying on every dev remembering the one-time step by hand.
+
+**Trigger is `PostFileSave`, not `sessionStarted` — changed 2026-08-25.** The original version used `sessionStarted`, on the assumption that "runs once when a session begins" was the natural fit for a one-time bootstrap check. Testing disproved that (see `TODO.md`): Kiro's Agent Hooks panel doesn't even list `aidlc-bootstrap-git-hooks.json` when `sessionStarted` is its trigger, and an end-to-end test (fresh session, hooks deliberately torn down first) confirmed it never fires at all. Using the panel's own "+ Create Hook" button defaulted to `PostFileSave`, which suggested that trigger is one Kiro's UI actually offers — so this hook was switched to it as the next thing to try. **This has not yet been confirmed end-to-end working** (unlike the `sessionStarted` failure, which was directly tested) — treat it as the current best guess, not a verified fix, until someone actually watches it fire.
+```json
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-bootstrap-git-hooks",
+      "trigger": "PostFileSave",
+      "action": {
+        "type": "agent",
+        "prompt": "Check whether this repo's git hooks are actually set up: does .githooks/pre-commit exist, AND does `git config core.hooksPath` already equal '.githooks'? Both must be true — if either is missing, the hooks aren't live even if the files exist. If both are already true, do nothing and proceed normally. If either is missing: (1) create the .githooks/ folder if it doesn't exist; (2) write .githooks/pre-commit, .githooks/post-checkout, .githooks/commit-msg, AND .githooks/pre-push with their real, current content — read it from what's already committed in this repo's git history if these files exist elsewhere (e.g. a prior commit, or docs/runbook.md's copies of them), do not invent new content or improvise a simplified version, since the real scripts contain fixes for several bugs found by testing (see TODO.md) that a rewritten-from-scratch version would silently reintroduce; recreate all four, not just the first three — a dev missing pre-push has no SonarQube gate hook at all, which is worse than having it present but disabled; (3) run `chmod +x .githooks/*`; (4) run `git config core.hooksPath .githooks`; (5) tell the user what was set up and why (first clone / hooks weren't configured on this machine yet). See .kiro/steering/aidlc-git-conventions.md for the conventions these hooks enforce.\""
+      },
+      "enabled": true
+    }
+  ]
+}
+```
+**Note:** unlike `sessionStarted` (fires once, nothing to answer), `PostFileSave` fires on *every file save* — a much noisier trigger for a check that only ever needs to do real work once per machine. The check itself is cheap (two conditions, both fast local checks) and a no-op the moment hooks are already live, so repeated firing is wasteful but not harmful — worth revisiting if a real once-per-session trigger turns out to exist after all.
+
 ### `.githooks/post-checkout`
 **Who makes it:** you, one time.
 **What it does:** empties the saved ticket the moment the dev switches to a new branch, so Kiro knows to ask again.

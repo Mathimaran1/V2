@@ -155,6 +155,30 @@ been made yet. Not bugs — just don't assume any of these are "done."
   `pre-commit` remains the only working local source.** Left installed
   (harmless, `uv tool uninstall kiro-usage` to remove) in case Kiro CLI
   ever enters the picture later.
+- [x] **`sessionStarted` is not a trigger Kiro's agent runtime actually
+      fires — confirmed 2026-08-25, two independent ways.** (1) Kiro's
+      Agent Hooks panel doesn't list `aidlc-bootstrap-git-hooks.json` at
+      all — only `aidlc-ask-for-ticket-if-missing.json` (`UserPromptSubmit`)
+      shows up, even though the `sessionStarted` file is on disk and
+      schema-valid. A hook created through the panel itself (via
+      "+ Create Hook") defaulted to trigger `PostFileSave`, suggesting
+      `sessionStarted` may not even be an option the UI offers. (2) Directly
+      tested end to end: reset the repo to a "fresh clone" state
+      (`.githooks/` moved aside, `git config --unset core.hooksPath`),
+      then started a genuinely new Kiro session — a `sessionStarted` hook
+      only ever gets one chance to fire, at session start. Sent a normal
+      first message; the `UserPromptSubmit` ask-ticket hook fired
+      correctly (read the empty `current-ticket.json`, recognized the
+      message wasn't a ticket ID, asked which ticket), but nothing
+      checked or recreated `.githooks/` — confirmed by inspecting the
+      filesystem immediately after: `.githooks/` was still missing and
+      `core.hooksPath` was still unset. **The bootstrap hook is currently
+      dead code.** `.githooks/` setup on a new machine still needs the
+      manual one-time step documented in `README.md`
+      (`git config core.hooksPath .githooks && chmod +x .githooks/*`)
+      until a working trigger is found — worth checking what triggers
+      the panel's "+ Create Hook" dropdown actually lists before assuming
+      no alternative exists.
 
 ## Design gap: baseline resets aren't tracked as distinct units — affects ANY reopened ticket, not just `"none"`
 - [x] **Fixed and tested 2026-08-25 — both required triggers built, not
