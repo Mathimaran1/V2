@@ -271,18 +271,17 @@ been made yet. Not bugs — just don't assume any of these are "done."
   **a cherry-picked commit does not get gitleaks-scanned** the way a
   normal commit does — don't assume hooks catch everything regardless of
   how a commit was created.
-- [ ] **`pre-commit` never validates `TICKET_ID` is non-empty after all
-  three resolution attempts (saved file → branch name → manual prompt)
-  fail.** Hit this for real: committed on `master` right after a branch
-  switch had cleared `current-ticket.json`, branch name didn't match the
-  ticket regex, and the manual `read -p` prompt got no input — produced
-  `.kiro-tracking/-1787640645.json` with `"ticket_id": ""`. In this
-  automated environment the prompt got no input because there's no TTY
-  to read from, but a real human dev hitting Enter blank at that same
-  prompt (typo, distraction, wrong key) hits the identical bug. Not
-  fixed — `pre-commit` should refuse to proceed (or force the manual
-  prompt to re-ask) rather than silently write a malformed filename and
-  an empty `ticket_id`.
+- [x] **Fixed 2026-08-25.** `pre-commit` never validated `TICKET_ID` was
+  non-empty after all three resolution attempts (saved file → branch
+  name → manual prompt) failed. Hit this for real: committed on `master`
+  right after a branch switch had cleared `current-ticket.json`, branch
+  name didn't match the ticket regex, and the manual `read -p` prompt got
+  no input — produced `.kiro-tracking/-1787640645.json` with
+  `"ticket_id": ""`. Fixed: `pre-commit` now exits 1 and writes nothing
+  if `TICKET_ID` is still empty at that point, same posture as the
+  gitleaks check. Tested directly: reproduced the exact original
+  conditions (empty ticket file, non-matching branch), confirmed the
+  commit now blocks cleanly with no file written.
 
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
