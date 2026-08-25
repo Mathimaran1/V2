@@ -208,6 +208,15 @@ been made yet. Not bugs — just don't assume any of these are "done."
   also land in (see the design gap above, which this exact mixing is what
   surfaced it). When testing hooks going forward, answer the ask-ticket
   hook with something obviously synthetic (e.g. `TEST-000`) instead.
+- [ ] **Pending cleanup, deliberately batched, not done yet:** at least
+      one more `"none"`-tagged test commit already landed after this
+      convention was written (`.kiro-tracking/none-1787639871.json`,
+      commit answering "none" while continuing loop testing right after
+      the convention was committed — habit is easy to slip on even right
+      after deciding not to). Sweep this into the *next* history-cleanup
+      pass rather than rewriting history again for one entry — batch it
+      with whatever else accumulates before testing is actually done for
+      this session.
 
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
