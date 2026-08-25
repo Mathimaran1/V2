@@ -19,7 +19,14 @@ if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
   echo "   .kiro-tracking/ file uploaded elsewhere. episode_id and" >&2
   echo "   mid-session ticket-switch detection were also added." >&2
   echo "" >&2
-  read -p "Type 'I agree' to continue (required once per machine): " CONSENT_ANSWER
+  # Read from the controlling terminal explicitly, not inherited stdin —
+  # git does not guarantee a hook's stdin is the user's tty (confirmed by
+  # testing: bash's own `read -p` silently skips printing the prompt and
+  # returns instantly empty when stdin isn't a terminal, which is exactly
+  # what happened here even though the surrounding `git commit` was typed
+  # interactively). Without this, the prompt never appears and the commit
+  # fails closed with no chance to actually answer it.
+  read -p "Type 'I agree' to continue (required once per machine): " CONSENT_ANSWER < /dev/tty
   if [ "$CONSENT_ANSWER" != "I agree" ]; then
     echo "❌ Commit blocked — consent not given. Re-run and type 'I agree' exactly to proceed." >&2
     exit 1
@@ -41,7 +48,7 @@ if [ -z "$TICKET_ID" ]; then
 fi
 
 if [ -z "$TICKET_ID" ]; then
-  read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID
+  read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID < /dev/tty
   SOURCE="manual_entry"
 fi
 
