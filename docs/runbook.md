@@ -87,14 +87,18 @@ inclusion: always
 **Who makes it:** a Kiro hook, automatically.
 **What it does:** remembers "which ticket am I working on right now."
 ```json
-{ "ticket_id": "PROJ-123" }
+{ "ticket_id": "PROJ-123", "credits_at_ticket_start": 200, "episode_id": "ep_68aabbcc1a2b3c" }
 ```
 - Gets filled in when the dev answers Kiro's question "which ticket?"
 - Gets emptied automatically when the dev switches to a new branch.
+- Briefly holds a fourth field, `pending_switch_to`, while a mid-session
+  switch question is awaiting an answer (see the hook below, CASE B) —
+  not part of the steady-state schema, gone again as soon as that
+  exchange resolves either way.
 
 ### `.kiro/hooks/ask-for-ticket-if-missing.json`
 **Who makes it:** you, one time — either through Kiro's Agent Hooks panel ("+ Create Hook"), or hand-written directly in this schema (confirmed: Kiro picks up hand-written files in `.kiro/hooks/` on its own, no UI step required, as long as the shape below is matched exactly).
-**What it does:** asks for the ticket ID when a new session starts, but only if nothing is saved yet.
+**What it does:** two jobs in one hook, since both need to fire on every prompt. (1) Asks for the ticket ID when nothing is saved yet (CASE A below). (2) Notices when a dev is planning/working on a *different* ticket than the one saved, without having switched branches — `post-checkout` only clears the file on an actual branch switch, so without this, that scenario silently misattributes credits (CASE B below). Both cases end in a fresh `credits_at_ticket_start` baseline and `episode_id` — a branch switch and a mid-session switch are the two things that should ever start a new episode; this hook is what makes the second one actually happen instead of just being a documented gap (see `TODO.md`).
 **Note:** this is Kiro's actual hook schema, confirmed by inspecting what the Agent Hooks UI itself writes to disk — an earlier draft of this file used a made-up shape (`when`/`then`/`promptSubmitted`/`agentAction`) that Kiro silently ignored. If you're adding more hooks later, match this shape, not that one.
 ```json
 {
@@ -105,7 +109,7 @@ inclusion: always
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "agent",
-        "prompt": "First check .kiro/current-ticket.json. If it already holds a non-empty ticket_id, do nothing extra and proceed with the user's request normally. If it is empty, this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) — so branch on the current message: (1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question — read the current credit total from ~/.config/Kiro/User/globalStorage/state.vscdb (the ItemTable row with key 'kiro.kiroAgent' holds a JSON value; read its 'kiro.resourceNotifications.usageState'.usageBreakdowns[0].currentUsage field), write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <that number>} into .kiro/current-ticket.json, briefly confirm it's saved, then continue handling the rest of their request normally — do not ask again. (2) Otherwise, the message is a normal work request, not an answer to a prior question — stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per branch (1). Caveat: if current-ticket.json already holds a different, non-empty ticket_id (i.e. the dev is switching tickets without switching git branch, so post-checkout never cleared it), ask the user to confirm before overwriting the baseline — otherwise credits from the two tickets will blend together in the delta calculation."
+        "prompt": "First check .kiro/current-ticket.json. There are two top-level cases.\n\nCASE A — ticket_id is empty or missing: this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) — so branch on the current message: (A1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question — read the current credit total AND generate a fresh episode_id by running exactly this command (do not improvise another method — the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` — this prints two lines: line 1 is the credit total, line 2 is the new episode_id. Use both verbatim, do not read either off of any other command's raw/truncated output and do not generate the episode_id yourself some other way. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into .kiro/current-ticket.json (this fully replaces the file's contents — there is no pending_switch_to to worry about here since the file was empty), briefly confirm it's saved, then continue handling the rest of their request normally — do not ask again. (A2) Otherwise, the message is a normal work request, not an answer to a prior question — stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per (A1).\n\nCASE B — ticket_id is non-empty: this is the mid-session ticket-switch case (no branch change has happened, so post-checkout never cleared the file) — also a two-step flow, using a pending_switch_to field in current-ticket.json as the state signal instead of file-emptiness, since the file stays non-empty throughout this whole exchange: (B1) if current-ticket.json ALSO already has a non-empty pending_switch_to field, a switch question was asked on the previous turn — treat the CURRENT message as the answer to it, not as a new request yet. If the message is a clear affirmative (e.g. 'yes', 'switch', 'confirm', or it repeats the pending_switch_to ticket ID), the switch is confirmed: generate a fresh baseline and episode_id for the NEW ticket by running exactly this command: `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` — same two-line output as in (A1). Then write {\"ticket_id\": <pending_switch_to's value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into current-ticket.json — this REPLACES the old ticket_id, baseline, and episode_id entirely, and drops the pending_switch_to field (do not carry it over). Briefly confirm the switch happened, then continue with the rest of their request normally. If the message is NOT a clear affirmative (declines, is ambiguous, or is unrelated to the question), default to NOT switching — this is the safe default, since silently switching on an ambiguous reply risks misattributing credits just as badly as never asking at all. Remove only the pending_switch_to field, leave ticket_id, credits_at_ticket_start, and episode_id exactly as they were, briefly note you're staying on the current ticket, then continue with their original request normally. (B2) Otherwise (no pending_switch_to set), check whether the user's CURRENT message clearly indicates they are now working on or actively planning a SPECIFIC different Jira ticket than the one saved — i.e. it mentions another ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ in a context suggesting real work or planning on it (not a passing reference, a comparison to past work, or an example). If so, do NOT proceed with their request yet — ask to confirm: \"You're currently tracked on <the saved ticket_id> — are you switching to <the mentioned ticket ID>?\", and write pending_switch_to set to that mentioned ticket ID into current-ticket.json, merged in alongside the existing ticket_id/credits_at_ticket_start/episode_id (do not touch those three fields yet), then wait for their next message to be treated as the answer per (B1). If no different ticket is clearly indicated, do nothing extra and proceed with the request normally, exactly as before this whole mid-session-switch logic existed."
       },
       "enabled": true
     }
@@ -186,6 +190,7 @@ except Exception:
     sys.exit(1)
 " 2>/dev/null)
 CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
+EPISODE_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_id // empty')
 
 # Credits are decimals (e.g. 229.72) — bash's $(( )) only does integers and
 # would silently truncate/break here, so use awk for the subtraction instead.
@@ -232,6 +237,15 @@ else
   SESSION_ID_JSON="null"
 fi
 
+# Same null-quoting pattern for episode_id — will genuinely be empty for
+# any current-ticket.json baseline set before this field existed, so this
+# is expected, not an error.
+if [ -n "$EPISODE_ID" ]; then
+  EPISODE_ID_JSON="\"$EPISODE_ID\""
+else
+  EPISODE_ID_JSON="null"
+fi
+
 # 4. Write the record and include it in this same commit
 mkdir -p .kiro-tracking
 LOGFILE=".kiro-tracking/${TICKET_ID}-$(date +%s).json"
@@ -243,6 +257,7 @@ cat > "$LOGFILE" << INNER_EOF
   "kiro_used": $([ -n "$SESSION_ID" ] && echo true || echo false),
   "credits_used_so_far": $CREDITS_DELTA,
   "credit_confidence": "$CREDIT_CONFIDENCE",
+  "episode_id": $EPISODE_ID_JSON,
   "dev": "$(git config user.email)",
   "branch": "$(git branch --show-current)",
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -427,26 +442,41 @@ DuckDB can query the JSON files directly where they sit in S3, and join
 them by `ticket_id` with plain SQL — no need to load them into another
 database first:
 ```sql
+WITH episode_totals AS (
+  SELECT ticket_id, episode_id,
+         max(credits_used_so_far) AS episode_credits,
+         max(commit_time)         AS episode_last_commit
+  FROM read_json_auto('s3://your-bucket/events/**/*.json')
+  GROUP BY ticket_id, episode_id
+)
 SELECT ticket_id,
-       max(credits_used_so_far) AS total_credits,
-       max(commit_time)         AS last_commit,
-       any_value(status)        AS latest_status
-FROM read_json_auto('s3://your-bucket/events/**/*.json')
+       sum(episode_credits)    AS total_credits,
+       max(episode_last_commit) AS last_commit
+FROM episode_totals
 GROUP BY ticket_id;
 ```
-**Why `max`, not `sum`:** `credits_used_so_far` in each commit's tracking JSON is
-*cumulative since the ticket's baseline*, not incremental since the previous
-commit — `pre-commit` only ever reads `credits_at_ticket_start`, it never
-rewrites it, so every commit under the same ticket recomputes the delta
-against the same fixed starting point. That means each later commit's number
-already includes everything from every earlier one on that ticket; the most
-recent commit's value already *is* the ticket total. `sum`ing them would
-double- (or many-times-) count, especially on a long-lived ticket with lots
-of commits. This also means a commit made shortly after the baseline is set
-can show `0.0000` if the underlying usage-tracking cache hasn't synced yet
-(confirmed by testing — see `TODO.md`) — that's fine and self-corrects, since
-it's the *latest* commit's number that matters, not any one commit in
-isolation.
+**Why `max` per episode, then `sum` across episodes — not one flat `max()` or
+`sum()`:** `credits_used_so_far` in each commit's tracking JSON is *cumulative
+since that baseline*, not incremental since the previous commit — `pre-commit`
+only ever reads `credits_at_ticket_start`, it never rewrites it, so every
+commit under the same *baseline* recomputes the delta against the same fixed
+starting point. Within one continuous stretch of work (one `episode_id`), the
+most recent commit's value already *is* that stretch's total — `sum`ing within
+an episode would double-count. But a ticket can have *more than one* baseline
+over its life (reopened after being closed, or — before this was tracked —
+`"none"` restarting on every use): each reopen gets a fresh `episode_id`, and
+a flat `max(credits_used_so_far)` across the whole ticket would silently drop
+every episode but whichever one happened to peak highest, not just risk being
+stale. Grouping by `(ticket_id, episode_id)` first, then summing those
+per-episode maxes, gets both right: correct within an episode, correct across
+episodes. (Confirmed by testing that both failure modes are real — see
+`TODO.md`.) This also means a commit made shortly after a baseline is set can
+show `0.0000` if the underlying usage-tracking cache hasn't synced yet — that's
+fine and self-corrects, since it's the latest commit *within that episode*
+that matters, not any one commit in isolation. Records with `episode_id: null`
+(written before this field existed) won't group correctly — treat those as
+their own single-commit episodes, or backfill before relying on this query
+over old data.
 This one query can pull together webhook events, the git commit tracking
 logs, and Kiro's usage reports, all at once, since they're all just files
 in S3.

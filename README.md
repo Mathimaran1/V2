@@ -55,7 +55,7 @@ the tracking hooks fire on their machine.
 .kiro/
   steering/company-policy.md   # rules Kiro always follows
   settings/mcp.json            # Jira + SonarQube MCP connections
-  hooks/ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket, once per branch
+  hooks/ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket (once per branch), and detect mid-session switches
   current-ticket.json          # local, gitignored — current ticket + starting credits
 .githooks/
   post-checkout                # clears current-ticket.json on new branch

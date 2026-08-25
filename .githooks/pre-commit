@@ -54,6 +54,7 @@ except Exception:
     sys.exit(1)
 " 2>/dev/null)
 CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
+EPISODE_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_id // empty')
 
 # Credits are decimals (e.g. 229.72) — bash's $(( )) only does integers and
 # would silently truncate/break here, so use awk for the subtraction instead.
@@ -99,6 +100,15 @@ else
   SESSION_ID_JSON="null"
 fi
 
+# Same null-quoting pattern for episode_id — will genuinely be empty for
+# any current-ticket.json baseline set before this field existed, so this
+# is expected, not an error.
+if [ -n "$EPISODE_ID" ]; then
+  EPISODE_ID_JSON="\"$EPISODE_ID\""
+else
+  EPISODE_ID_JSON="null"
+fi
+
 # 4. Write the record and include it in this same commit
 mkdir -p .kiro-tracking
 LOGFILE=".kiro-tracking/${TICKET_ID}-$(date +%s).json"
@@ -110,6 +120,7 @@ cat > "$LOGFILE" << INNER_EOF
   "kiro_used": $([ -n "$SESSION_ID" ] && echo true || echo false),
   "credits_used_so_far": $CREDITS_DELTA,
   "credit_confidence": "$CREDIT_CONFIDENCE",
+  "episode_id": $EPISODE_ID_JSON,
   "dev": "$(git config user.email)",
   "branch": "$(git branch --show-current)",
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

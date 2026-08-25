@@ -155,55 +155,17 @@ been made yet. Not bugs — just don't assume any of these are "done."
   ever enters the picture later.
 
 ## Design gap: baseline resets aren't tracked as distinct units — affects ANY reopened ticket, not just `"none"`
-- [~] **IN PROGRESS, deliberately partial — episode_id has only ONE of its
-      two required triggers built, do not treat as done until both exist.**
-      A fresh `episode_id` needs to be created whenever a baseline resets,
-      and there are two separate things that should cause that: (1) a
-      branch switch, via `post-checkout` clearing the file — BUILT, this
-      is what the code below does; (2) a mid-session ticket switch with NO
-      branch change (see the separate design-gap section below,
-      "mid-session ticket switch... goes undetected") — NOT BUILT. Until
-      (2) exists, the case that motivated this whole fix — planning ahead
-      on a different ticket without switching branches — still silently
-      misattributes credits, just to the wrong *episode* now instead of
-      the wrong *ticket*. Building episode_id generation alone does not
-      close this gap; it only fixes the reopened-ticket case. Do not mark
-      this section done, or move on to the reopen end-to-end test as if
-      the fix is complete, until item 7 (mid-session detection) is also
-      built — that test would only exercise trigger (1) and give false
-      confidence about (2).
-- [ ] **Broadened from an earlier `"none"`-specific version of this note
-      (still not fixed — only ever documented, nothing built yet).** The
-      `max()`-not-`sum()`
-      fix assumes a ticket has *one continuous baseline* for its whole
-      life. `"none"` breaks that constantly (fresh baseline every use),
-      but so does any **real** ticket that gets reopened: worked, closed,
-      branch switched away (`post-checkout` clears the baseline), then
-      picked back up later — `ask-for-ticket-if-missing` sets a brand new
-      baseline at whatever `currentUsage` is by then, unrelated to the
-      first round's peak. Concretely:
-      ```
-      Round 1: baseline=200, commits show 2.0 → 4.0 → 5.0, ticket closed
-      Round 2 (reopened later): baseline=340 (other work happened between),
-               commits show 0.5 → 1.2
-      max(credits_used_so_far) WHERE ticket_id='PROJ-123' → 5.0
-      ```
-      Round 2's 1.2 credits are silently **dropped entirely**, not added —
-      worse than double-counting, since 5.0 looks like a normal, plausible,
-      correct-looking number instead of an obviously wrong one. This is
-      the same root cause `"none"` originally surfaced (a fresh baseline
-      per use, not tracked as a distinct unit) — `"none"` just triggers it
-      constantly, while a real ticket only hits it on reopen. Raising this
-      from "low urgency, only affects `'none'`" to "affects any ticket
-      with more than one work session," a realistic pattern for real
-      tickets, not just an edge case.
-      **Proposed fix, not yet built or tested:** track episodes, not just
-      tickets — `ask-for-ticket-if-missing` generates an `episode_id`
-      whenever it sets a fresh baseline (e.g. `ep_<random hex>`), writes
-      it into `current-ticket.json` alongside `credits_at_ticket_start`;
-      `pre-commit` copies it into every tracking record, same as
-      `ticket_id`; the dashboard query becomes a two-step sum-of-maxes
-      instead of one `max()`:
+- [x] **Fixed and tested 2026-08-25 — both required triggers built, not
+      just one.** A fresh `episode_id` is created whenever a baseline
+      resets, via either of the two things that should cause that: (1) a
+      branch switch, `post-checkout` clearing the file; (2) a mid-session
+      ticket switch with no branch change, detected by
+      `ask-for-ticket-if-missing`'s CASE B logic (see the mid-session
+      design-gap section below — this is the SAME fix as that one, not a
+      separate item; building trigger (1) alone would have only fixed the
+      reopened-ticket case and left the more important mid-session case
+      silently broken). `pre-commit` copies `episode_id` into every
+      tracking record. Dashboard query is a two-step sum-of-maxes:
       ```sql
       WITH episode_totals AS (
         SELECT ticket_id, episode_id, max(credits_used_so_far) AS episode_credits
@@ -213,11 +175,31 @@ been made yet. Not bugs — just don't assume any of these are "done."
       SELECT ticket_id, sum(episode_credits) AS total_credits
       FROM episode_totals GROUP BY ticket_id;
       ```
-      **Before building this for real:** simulate an actual reopen (switch
-      away from a test branch, do unrelated work to move `currentUsage`,
-      switch back) and confirm episode IDs genuinely differ between the
-      two rounds and the sum comes out right — same testing discipline as
-      everything else today, not just trusting the design on paper.
+      **Tested for real, both triggers together, not episode_id alone:**
+      simulated a full reopen cycle (work → simulated branch-switch clear
+      → reopen with fresh baseline+episode → two more commits) via real
+      git commits through the actual `pre-commit` script, then patched in
+      realistic credit deltas (the read-mechanism itself is separately
+      verified elsewhere; this test was specifically about the
+      aggregation) and ran the actual query logic against the real
+      generated tracking files: **6.2000** — exactly `max(5.0) +
+      max(0.8,1.2) = 5.0+1.2`, matching the worked example above. Also
+      tested the mid-session-switch trigger directly: confirmed switch
+      (new ticket, new episode, old one abandoned correctly) and declined
+      switch (`pending_switch_to` cleared, original ticket/episode
+      untouched) both simulated end-to-end through real commits. DuckDB
+      itself isn't installed here, so the query was verified with an
+      equivalent Python implementation of the same group/max/sum logic
+      against real files, not DuckDB directly — worth a real DuckDB run
+      once that's available, though the logic itself is simple enough
+      that this is a low-risk gap.
+      **Known remaining limit, not a bug:** this test simulated the file
+      *transitions* Kiro's agent should produce (`pending_switch_to` set,
+      then resolved) directly, since driving Kiro's actual UI isn't
+      possible from here — it did NOT verify that Kiro's agent correctly
+      *recognizes* a mid-session switch from natural conversation and
+      asks at the right moment. That still needs a real run through Kiro
+      by a human before fully trusting CASE B in practice.
 
 ## Testing convention
 - **Use a distinct ticket ID for hook testing, not `"none"`.** `"none"` is
@@ -257,25 +239,21 @@ been made yet. Not bugs — just don't assume any of these are "done."
       excluded without needing manual cleanup.
 
 ## Design gap: mid-session ticket switch, no branch change, goes undetected
-- [ ] **New, not previously proposed in this project despite how it might
-      read — checked the actual hook file before writing this down.** If
-      a dev is still on `PROJ-123`'s branch (`current-ticket.json` still
-      holds it, non-empty) and starts planning/exploring `PROJ-456` in the
-      same Kiro session without switching branches, nothing catches it —
-      `ask-for-ticket-if-missing`'s own first line is "if it already holds
-      a non-empty ticket_id, do nothing extra." Every credit spent on
-      `PROJ-456` gets silently attributed to `PROJ-123` until the next
-      branch switch finally clears the file. Worse than the reopened-
-      ticket gap above: that one is honest-but-wrong (system miscounts,
-      dev did nothing unusual); this one is silent, and triggered by
-      completely normal behavior (planning ahead before switching
-      branches), not an edge case. **Proposed, not built or tested:** a
-      second hook (or an extension to the existing one) that checks, even
-      when the ticket file is non-empty, whether the current message
-      mentions a different ticket ID than what's saved, and asks to
-      confirm before treating it as a switch — closing a snapshot for the
-      old ticket's episode and starting a fresh baseline/episode for the
-      new one before proceeding.
+- [x] **Fixed and tested 2026-08-25 — see the episode_id entry above,
+      this is the same fix, not a separate one.** `ask-for-ticket-if-
+      missing`'s CASE B now checks, even when the ticket file is
+      non-empty, whether the current message clearly indicates work on a
+      different specific ticket — using a `pending_switch_to` field in
+      `current-ticket.json` as the two-step state signal (file-emptiness
+      can't be the signal here, since the file stays non-empty the whole
+      time). Confirmed switch: new ticket, fresh baseline, fresh
+      episode_id, old one abandoned. Declined/ambiguous: defaults to NOT
+      switching (safe default — an accidental switch on an ambiguous
+      reply would misattribute credits just as badly as never asking).
+      Both paths simulated end-to-end through real commits. Still open:
+      whether Kiro's agent actually *recognizes* a mid-session switch
+      from natural conversation wasn't verified here (only the file-state
+      mechanics were) — needs a real run through Kiro before full trust.
 
 ## Found while fixing the branch mix-up above (2026-08-25)
 - **`git cherry-pick` did not invoke `pre-commit` or `commit-msg` here,**
