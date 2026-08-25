@@ -4,6 +4,11 @@
 # Sonar scan scratch output
 /tmp/sonar-scan.log
 
+# Local hook diagnostic log — NOT the tracking data itself (that's the
+# .kiro-tracking/*.json files, which ARE meant to be committed every
+# time; see docs/runbook.md). This is just "did the hook run ok" noise.
+.kiro-tracking/hook-health.log
+
 # OS / editor noise
 .DS_Store
 *.swp
