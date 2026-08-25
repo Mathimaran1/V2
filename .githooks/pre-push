@@ -1,4 +1,15 @@
 #!/bin/bash
+# SonarQube gate temporarily disabled — no real SonarQube host/token configured
+# yet, so this would just fail against placeholder values. Remove this block
+# to re-enable once a real host is set up. Tracked in TODO.md at repo root —
+# check it off there when this gets re-enabled for real, don't just delete
+# this block quietly.
+echo "" >&2
+echo "⚠️⚠️⚠️  SONARQUBE QUALITY GATE IS DISABLED — this push is NOT being checked  ⚠️⚠️⚠️" >&2
+echo "    See .githooks/pre-push (top of file) and TODO.md to re-enable." >&2
+echo "" >&2
+exit 0
+
 # Mode is a single flag you control — start in "warn", switch to "block" once trusted
 MODE=$(aws ssm get-parameter --name /kiro-tracking/sonarqube-gate-mode \
   --query 'Parameter.Value' --output text 2>/dev/null || echo "warn")
