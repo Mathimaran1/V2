@@ -1,0 +1,12 @@
+{
+  "ticket_id": "none",
+  "source_of_ticket_id": "kiro_session",
+  "kiro_session_id": "sess_8ba20eef-e872-44f2-af90-1c3a1ccce35d",
+  "kiro_used": true,
+  "credits_used_so_far": 1.2000,
+  "credit_confidence": "high",
+  "episode_id": "ep_6a8d735e854c17",
+  "dev": "gowthamaran006@gmail.com",
+  "branch": "master",
+  "commit_time": "2026-08-25T11:52:27Z"
+}

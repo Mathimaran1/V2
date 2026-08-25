@@ -5,13 +5,19 @@
 # commit happens to be clean." A per-USER marker (not per-repo), since
 # consent is about the person, not any one project — versioned so a
 # future change to what's tracked can force a re-prompt by bumping it.
-CONSENT_VERSION="v1"
+CONSENT_VERSION="v2"
 CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
 if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
   echo "" >&2
   echo "📋 This project tracks Kiro AI usage and credit spend per commit," >&2
   echo "   linked to your Jira ticket and git identity (see docs/runbook.md" >&2
   echo "   section 6 for exactly what's recorded, section 7 for who sees it)." >&2
+  echo "" >&2
+  echo "   Updated ($CONSENT_VERSION): credit/ticket data now rides as six" >&2
+  echo "   Kiro-* trailers on the commit message itself (visible in git log" >&2
+  echo "   and to anyone with read access to this repo), not a hidden" >&2
+  echo "   .kiro-tracking/ file uploaded elsewhere. episode_id and" >&2
+  echo "   mid-session ticket-switch detection were also added." >&2
   echo "" >&2
   read -p "Type 'I agree' to continue (required once per machine): " CONSENT_ANSWER
   if [ "$CONSENT_ANSWER" != "I agree" ]; then
