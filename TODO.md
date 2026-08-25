@@ -155,8 +155,9 @@ been made yet. Not bugs — just don't assume any of these are "done."
   ever enters the picture later.
 
 ## Design gap: baseline resets aren't tracked as distinct units — affects ANY reopened ticket, not just `"none"`
-- [ ] **Broadened from the `"none"`-specific note below (still not fixed —
-      only ever documented, nothing built yet).** The `max()`-not-`sum()`
+- [ ] **Broadened from an earlier `"none"`-specific version of this note
+      (still not fixed — only ever documented, nothing built yet).** The
+      `max()`-not-`sum()`
       fix assumes a ticket has *one continuous baseline* for its whole
       life. `"none"` breaks that constantly (fresh baseline every use),
       but so does any **real** ticket that gets reopened: worked, closed,
@@ -208,15 +209,52 @@ been made yet. Not bugs — just don't assume any of these are "done."
   also land in (see the design gap above, which this exact mixing is what
   surfaced it). When testing hooks going forward, answer the ask-ticket
   hook with something obviously synthetic (e.g. `TEST-000`) instead.
-- [ ] **Pending cleanup, deliberately batched, not done yet:** at least
-      one more `"none"`-tagged test commit already landed after this
-      convention was written (`.kiro-tracking/none-1787639871.json`,
-      commit answering "none" while continuing loop testing right after
-      the convention was committed — habit is easy to slip on even right
-      after deciding not to). Sweep this into the *next* history-cleanup
-      pass rather than rewriting history again for one entry — batch it
-      with whatever else accumulates before testing is actually done for
-      this session.
+- [ ] **Pending cleanup, deliberately batched, not done yet:** two more
+      `"none"`-tagged test commits landed after this convention was
+      written (`.kiro-tracking/none-1787639871.json`,
+      `.kiro-tracking/none-1787639997.json` — habit is easy to slip on
+      even right after deciding not to). Do this cleanup on `master`
+      only, not the leftover test branches (`ANG-999-test-branch`,
+      `ANG-998-test-branch`) — three real commits from those branches got
+      cherry-picked onto `master` (see the cherry-pick/hooks note below),
+      so `master` is now the canonical history; the test branches are
+      safe to delete once that's done, nothing unique left on them worth
+      keeping (their only remaining unique commit is a throwaway "second
+      test commit" with a `some-file.txt` artifact, deliberately not
+      brought over).
+
+## Design gap: mid-session ticket switch, no branch change, goes undetected
+- [ ] **New, not previously proposed in this project despite how it might
+      read — checked the actual hook file before writing this down.** If
+      a dev is still on `PROJ-123`'s branch (`current-ticket.json` still
+      holds it, non-empty) and starts planning/exploring `PROJ-456` in the
+      same Kiro session without switching branches, nothing catches it —
+      `ask-for-ticket-if-missing`'s own first line is "if it already holds
+      a non-empty ticket_id, do nothing extra." Every credit spent on
+      `PROJ-456` gets silently attributed to `PROJ-123` until the next
+      branch switch finally clears the file. Worse than the reopened-
+      ticket gap above: that one is honest-but-wrong (system miscounts,
+      dev did nothing unusual); this one is silent, and triggered by
+      completely normal behavior (planning ahead before switching
+      branches), not an edge case. **Proposed, not built or tested:** a
+      second hook (or an extension to the existing one) that checks, even
+      when the ticket file is non-empty, whether the current message
+      mentions a different ticket ID than what's saved, and asks to
+      confirm before treating it as a switch — closing a snapshot for the
+      old ticket's episode and starting a fresh baseline/episode for the
+      new one before proceeding.
+
+## Found while fixing the branch mix-up above (2026-08-25)
+- **`git cherry-pick` did not invoke `pre-commit` or `commit-msg` here,**
+  despite `core.hooksPath` correctly set and both hooks executable —
+  confirmed three independent ways: no gitleaks banner in the output,
+  `hook-health.log`'s mtime predates the cherry-pick, and the resulting
+  commit messages (including `Kiro-Session`/`Kiro-Credits` trailers) are
+  byte-identical to the originals rather than regenerated. Not
+  investigated further (root cause unconfirmed), but worth knowing:
+  **a cherry-picked commit does not get gitleaks-scanned** the way a
+  normal commit does — don't assume hooks catch everything regardless of
+  how a commit was created.
 
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
