@@ -75,4 +75,5 @@ infra/
   pipeline.source.json         # single switch point: which repo provider CodePipeline reads from
 scripts/
   coverage-report.sh           # local version of "tracked commits ÷ total, per dev" — no AWS needed
+  calculate-pr-credits.sh      # total Kiro credits for a PR/range — max per episode, sum per ticket
 ```

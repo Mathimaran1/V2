@@ -367,6 +367,43 @@ been made yet. Not bugs — just don't assume any of these are "done."
       AWS daily coverage check will eventually run automatically across
       the whole team — this is the on-demand, single-repo version of it.
 
+## Tracking source of truth moved: commit trailers, not S3 (2026-08-25)
+- [x] **Done, per explicit decision this session, not something I chose
+      unilaterally.** S3 upload in `pre-commit` was failing every single
+      commit all session (read-only AWS role) — removed. `commit-msg`'s
+      six trailers (`Kiro-Ticket`, `Kiro-Episode`, `Kiro-Credits`,
+      `Kiro-Confidence`, `Kiro-Session`, `Kiro-Source`) are now the
+      durable, authoritative record; `.kiro-tracking/*.json` kept as a
+      local-only convenience copy, not the source of truth (explicit
+      decision — asked rather than assumed). Neither `git push` nor
+      reading commit messages back needs any AWS write access at all.
+- [x] **`scripts/calculate-pr-credits.sh` — built and tested, adapted
+      from the original ask.** Original spec called for
+      `aws codecommit get-commit`, but this account's CodeCommit access
+      is blocked entirely (not just read/write-scoped — see `README.md`)
+      and no git remote is configured on this repo at all, so that
+      version would have been unverifiable. Built against local git +
+      `gh` instead (explicit decision, not assumed): `--repo/--pr` mode
+      uses `gh pr view` to resolve commit SHAs (available and
+      authenticated, confirmed), `--range <base>..<head>` mode works
+      against local history with no network/AWS at all. Same
+      max-per-episode-then-sum-per-ticket logic as the dashboard query,
+      tested in isolation against the same worked example (5.0+1.2=6.2)
+      and against this repo's own real trailer-tagged commits. **Not
+      tested:** the `gh pr view` path itself — this repo has no
+      remote/PRs to test against yet; verified it fails cleanly on a
+      nonexistent repo/PR rather than crashing, but a real PR run is
+      still needed before fully trusting that specific path.
+- [ ] **Not yet updated, found while doing the above — flagging, not
+      fixing, since it's bigger than what was asked this round.** The
+      DuckDB dashboard section further below still assumes tracking data
+      lands in S3 as JSON (`read_json_auto('s3://...')`). That
+      assumption is now stale for anything using the commit-trailer
+      approach — the dashboard design itself needs to shift to reading
+      commit messages (via git/GitHub API) instead of, or alongside, S3.
+      Worth a deliberate follow-up, not a quiet edit alongside something
+      else.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
