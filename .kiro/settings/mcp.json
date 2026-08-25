@@ -1,14 +1,28 @@
 {
   "mcpServers": {
-    "atlassian": {
-      "url": "https://mcp.atlassian.com/v1/sse",
+    "atlassian-rovo": {
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
       "disabled": false,
-      "autoApprove": ["getJiraIssue", "searchJiraIssuesUsingJql"]
+      "autoApprove": []
     },
-    "sonarqube": {
-      "url": "https://your-sonarqube-host/mcp",
+    "aws": {
+      "command": "/home/srimathi/.local/bin/uvx",
+      "args": [
+        "mcp-proxy-for-aws@1.6.4",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--profile",
+        "codecommit-role",
+        "kiro-s3-readonly",
+        "--region",
+        "ap-south-1",
+        "--read-only"
+      ],
+      "env": {
+        "AWS_REGION": "ap-south-1",
+        "AWS_DEFAULT_REGION": "ap-south-1"
+      },
       "disabled": false,
-      "autoApprove": ["getQualityGateStatus", "getProjectIssues"]
+      "autoApprove": []
     }
   }
 }
