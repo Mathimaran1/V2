@@ -397,7 +397,7 @@ Without this, none of the hooks above will run on that dev's machine.
 | Part | Runs when | What it's for |
 |---|---|---|
 | PR check (Lambda) | Every time a Pull Request is opened/updated | Looks for the Kiro tag on every commit. Missing tag → warns at first, later can block the merge. One setting controls warn vs block, so you can turn on blocking only once you trust it. |
-| Daily coverage check | Once a day | Counts how many commits actually have tracking data vs. total commits. Tells you "tracking is broken" instead of confusing it with "not using Kiro." |
+| Daily coverage check | Once a day | Counts how many commits actually have tracking data vs. total commits. Tells you "tracking is broken" instead of confusing it with "not using Kiro." A local, on-demand version of the same idea (`scripts/coverage-report.sh`, no AWS needed) already exists — this row is that same metric, run automatically and across the whole team instead of one dev checking their own repo by hand. |
 | Weekly health check | Once a week | Tests if reading Kiro's credit number still works, in case a Kiro update changed something. |
 | Jira update rule | When the pipeline or SonarQube finishes | Posts the result back onto the ticket automatically. |
 | SonarQube alert | When the quality check finishes | Tells AWS the pass/fail result. |

@@ -326,6 +326,19 @@ been made yet. Not bugs — just don't assume any of these are "done."
       logic itself is simple bash (`read -p` + string compare) with low
       risk of hidden behavior, but worth a real human running through it
       once in an actual terminal before fully trusting it.
+- [x] **Coverage-number metric — local version done**, full AWS-scheduled
+      version still not built (needs the AWS side generally, tracked
+      separately). `scripts/coverage-report.sh`: tracked commits ÷ total,
+      per dev, computed purely from `git log` (matches on the
+      `Kiro-Session:` trailer `commit-msg` already stamps) — no AWS
+      dependency, usable right now. Tested both paths for real: normal
+      run showed 19/19 (100%); simulated a dev bypassing hooks entirely
+      (`git commit --no-verify`, i.e. flaw #2 from the original list —
+      "a dev can turn off the hooks on their own laptop") and confirmed
+      it correctly dropped to 19/20 (95%) and named the exact untracked
+      commit, not just a vague percentage. This is the same metric the
+      AWS daily coverage check will eventually run automatically across
+      the whole team — this is the on-demand, single-repo version of it.
 
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read

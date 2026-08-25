@@ -73,4 +73,6 @@ docs/
   source-repo-decision.md      # why GitHub now / CodeCommit later, and how to switch
 infra/
   pipeline.source.json         # single switch point: which repo provider CodePipeline reads from
+scripts/
+  coverage-report.sh           # local version of "tracked commits ÷ total, per dev" — no AWS needed
 ```
