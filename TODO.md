@@ -154,29 +154,52 @@ been made yet. Not bugs — just don't assume any of these are "done."
   (harmless, `uv tool uninstall kiro-usage` to remove) in case Kiro CLI
   ever enters the picture later.
 
-## Design gap: `"none"` isn't a single ticket, and neither `max()` nor `sum()` handles it right
-- [ ] **Found while cleaning up today's test data.** The `max()`-not-`sum()`
-      fix (see above) assumes a ticket has *one continuous baseline* for its
-      whole life — true for a real Jira ticket, false for `"none"`.
-      `"none"` gets a **fresh baseline every time** someone answers "none"
-      (today's hook testing, then some unrelated no-ticket work next month,
-      etc.) — each restart is independent. So:
-      - `sum(credits_used_so_far) WHERE ticket_id='none'` double-counts,
-        same as any other ticket (each commit's value already includes
-        everything since ITS baseline).
-      - `max(credits_used_so_far) WHERE ticket_id='none'` is *worse* than
-        for a real ticket — it doesn't just risk being stale, it silently
-        **drops every no-ticket work session except whichever one happened
-        to reach the single highest cumulative number**, discarding the
-        rest entirely.
-      Neither aggregation is correct for `"none"` as currently designed.
-      Not fixed yet — would need something like grouping by
-      (ticket_id, baseline-epoch) instead of just ticket_id before
-      `"none"`'s totals can be trusted, e.g. detecting baseline resets via
-      gaps/drops in `credits_used_so_far` within the same ticket_id, or
-      writing a baseline-session id into each record at hook-set time.
-      Low urgency — nothing currently depends on `"none"`'s aggregate
-      total for anything real — but don't build a report on it as-is.
+## Design gap: baseline resets aren't tracked as distinct units — affects ANY reopened ticket, not just `"none"`
+- [ ] **Broadened from the `"none"`-specific note below (still not fixed —
+      only ever documented, nothing built yet).** The `max()`-not-`sum()`
+      fix assumes a ticket has *one continuous baseline* for its whole
+      life. `"none"` breaks that constantly (fresh baseline every use),
+      but so does any **real** ticket that gets reopened: worked, closed,
+      branch switched away (`post-checkout` clears the baseline), then
+      picked back up later — `ask-for-ticket-if-missing` sets a brand new
+      baseline at whatever `currentUsage` is by then, unrelated to the
+      first round's peak. Concretely:
+      ```
+      Round 1: baseline=200, commits show 2.0 → 4.0 → 5.0, ticket closed
+      Round 2 (reopened later): baseline=340 (other work happened between),
+               commits show 0.5 → 1.2
+      max(credits_used_so_far) WHERE ticket_id='PROJ-123' → 5.0
+      ```
+      Round 2's 1.2 credits are silently **dropped entirely**, not added —
+      worse than double-counting, since 5.0 looks like a normal, plausible,
+      correct-looking number instead of an obviously wrong one. This is
+      the same root cause `"none"` originally surfaced (a fresh baseline
+      per use, not tracked as a distinct unit) — `"none"` just triggers it
+      constantly, while a real ticket only hits it on reopen. Raising this
+      from "low urgency, only affects `'none'`" to "affects any ticket
+      with more than one work session," a realistic pattern for real
+      tickets, not just an edge case.
+      **Proposed fix, not yet built or tested:** track episodes, not just
+      tickets — `ask-for-ticket-if-missing` generates an `episode_id`
+      whenever it sets a fresh baseline (e.g. `ep_<random hex>`), writes
+      it into `current-ticket.json` alongside `credits_at_ticket_start`;
+      `pre-commit` copies it into every tracking record, same as
+      `ticket_id`; the dashboard query becomes a two-step sum-of-maxes
+      instead of one `max()`:
+      ```sql
+      WITH episode_totals AS (
+        SELECT ticket_id, episode_id, max(credits_used_so_far) AS episode_credits
+        FROM read_json_auto('s3://your-tracking-bucket/tracking/*.json')
+        GROUP BY ticket_id, episode_id
+      )
+      SELECT ticket_id, sum(episode_credits) AS total_credits
+      FROM episode_totals GROUP BY ticket_id;
+      ```
+      **Before building this for real:** simulate an actual reopen (switch
+      away from a test branch, do unrelated work to move `currentUsage`,
+      switch back) and confirm episode IDs genuinely differ between the
+      two rounds and the sum comes out right — same testing discipline as
+      everything else today, not just trusting the design on paper.
 
 ## Testing convention
 - **Use a distinct ticket ID for hook testing, not `"none"`.** `"none"` is
