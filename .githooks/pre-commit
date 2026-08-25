@@ -16,6 +16,21 @@ if [ -z "$TICKET_ID" ]; then
   SOURCE="manual_entry"
 fi
 
+# Fail closed, not silently: hit for real (see TODO.md) — a blank read
+# (no TTY in an automated context, or a human hitting Enter blank) used
+# to sail through and write a malformed record ("ticket_id": "", filename
+# starting with "-"). Same posture as the gitleaks check above: block the
+# commit rather than write bad tracking data.
+if [ -z "$TICKET_ID" ]; then
+  echo "❌ No ticket ID resolved — not saved in .kiro/current-ticket.json," >&2
+  echo "   branch name didn't match a ticket pattern, and nothing was" >&2
+  echo "   entered at the prompt. Commit blocked rather than writing a" >&2
+  echo "   malformed tracking record. Answer Kiro's ticket question first," >&2
+  echo "   name your branch TICKET-123-..., or re-run and type a real" >&2
+  echo "   ticket ID (or 'none') at the prompt." >&2
+  exit 1
+fi
+
 # 3. Get credit numbers from the real local sources (no kiro-session-info —
 #    that command doesn't exist; confirmed by inspecting the actual files):
 #    - session id: most recently modified ~/.kiro/sessions/*/*/session.json
