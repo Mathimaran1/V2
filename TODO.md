@@ -1,0 +1,166 @@
+# Open items — check before this goes further
+
+Things that were deliberately parked mid-setup, or decisions that haven't
+been made yet. Not bugs — just don't assume any of these are "done."
+
+## Decide before creating any repo
+- [ ] **Where does this repo actually live?** Company code (tracks devs'
+      AI usage + credit spend) currently only exists locally, and the plan
+      discussed was pushing to a *personal* GitHub account (`Mathimaran1`).
+      Worth a quick check with whoever owns the AWS/Jira accounts on
+      whether this belongs in a company-owned org/repo instead — same
+      reason who sees the tracking data matters (see `docs/runbook.md`
+      section 7, legal sign-off).
+- [ ] **AWS account ID in `docs/source-repo-decision.md`** (`143912951401`).
+      Not a credential by itself, but combined with the role name
+      (`CodeInCity-AI-Assisted-POC`, visible elsewhere) it narrows things
+      down. Redact before any public push; lower priority if staying
+      private, but still worth cleaning up.
+
+## Disabled, not fixed — re-enabling is a deliberate decision
+- [ ] **SonarQube quality gate is OFF** (`.githooks/pre-push`, top of
+      file — hard `exit 0` before the real scan logic). No real
+      SonarQube host/token exists yet. The hook now prints a loud warning
+      on every push while this is true. To re-enable: delete the
+      `echo`/`exit 0` block at the top of `pre-push`, then fill in a real
+      `sonar.host.url`, `SONARQUBE_TOKEN`, and `sonar.projectKey`
+      (currently `YOUR_PROJECT`/`your-sonarqube-host` placeholders).
+
+## Untested
+- [x] **Jira (`atlassian-rovo` in `.kiro/settings/mcp.json`) connection
+      verified 2026-08-25** — asked Kiro to list Jira projects and got
+      real data back from `teamlease-tech.atlassian.net` (13 projects:
+      ALCS, ANG, BENEFITAPP, DLK, GTMS, GTMS1, HCM, HCMDWS, HH, HI, HT,
+      JP, PL). `PROJ` in `company-policy.md`'s `PROJ-123` example was
+      confirmed to be just a placeholder, not a real key. Real project
+      is **ANG** (ALCS-NG) — swap `PROJ-123` → `ANG-123` in
+      `company-policy.md` before the ticket-linking rule is actually
+      followable. Deliberately not touching Jira/this file further for
+      now — revisit when ready.
+
+## Found by actually testing the hooks end-to-end (2026-08-25)
+- [x] **`.kiro/hooks/ask-ticket.json` used a made-up schema and never
+      ran.** Kiro's real hook shape (confirmed from what its own Agent
+      Hooks UI writes to disk) is `{version, hooks: [{name, trigger,
+      action: {type, prompt}, enabled}]}`, not the `when`/`then`/
+      `promptSubmitted`/`agentAction` shape this repo had. Fixed: real
+      file is now `.kiro/hooks/ask-for-ticket-if-missing.json`; confirmed
+      hand-written files in `.kiro/hooks/` are picked up on their own, no
+      need to create hooks through the UI every time.
+- [x] **The ask-then-save flow needs two prompts, not one.** A
+      `UserPromptSubmit` hook can't ask a question and then wait for the
+      reply within a single turn — the original instruction assumed it
+      could, so it just re-asked forever and `credits_at_ticket_start`
+      never got saved (confirmed: file's mtime never changed across
+      several rounds of answering). Fixed by rewriting the instruction to
+      branch on whether the current message *is* the pending answer.
+- [x] **Reading credits without a bundled instruction lets the agent
+      improvise, and it can silently produce a wrong number.** With no
+      `sqlite3` CLI installed, the agent fell back to `cat`-ing the raw
+      binary `.vscdb` file and pulled a number (`168.77`) out of the
+      garbled output — not a real read, just noise that looked plausible.
+      Fixed by putting the exact working `python3 -c ...` command
+      (same one `pre-commit` already uses) directly in the hook
+      instruction, so it's run verbatim instead of guessed.
+- [x] **`commit-msg` used `cat *.json | tail -1 | jq`, which broke.**
+      `pre-commit` writes each record pretty-printed across multiple
+      lines, so `tail -1` on concatenated files grabs a lone trailing
+      `}` — jq fails outright on that, so both trailers came out
+      *empty*, not even their `"none"`/`"n/a"` fallback. Fixed to read
+      one whole file (most recent by mtime) instead of a `tail`ed
+      fragment.
+- [x] **`credits_used_so_far` can read `0.0000` right after setting a
+      baseline, even when real work happened in between — confirmed lag,
+      not a permanent freeze, and the mechanism is now confirmed (not
+      guessed).** Isolated with a controlled test: polled the SQLite
+      `kiro.kiroAgent.currentUsage` value every 15s for ~10 min while
+      doing Kiro actions, and cross-checked jumps against
+      `~/.config/Kiro/logs/<session>/window*/exthost/kiro.kiroAgent/
+      q-client.log`. Three jumps (235.49→237.14→237.61→237.73) each
+      landed within ~15s of a logged `GetUsageLimitsCommand` call from
+      `CodeWhispererRuntimeClient` — an AWS API call, not a local editor
+      command and not a fixed timer. **Confirmed:** `state.vscdb` is just
+      a cache of whatever that AWS call last returned; it updates
+      whenever Kiro's client happens to make that call (correlates with
+      activity, no clean fixed interval), not specifically on new
+      sessions and not on a documented schedule. (The profile ARN and
+      IAM Identity Center user ID visible in that log line are
+      account-identifying — redact before any public push, same as the
+      existing AWS account ID note above.) **Because it's a real network
+      call, not a local command: don't try to force-trigger it from
+      `pre-commit`** — would mean replicating Kiro's own AWS auth inside
+      a git hook, adding real latency and a hard network dependency to
+      every commit. The `credit_confidence` flag below is the right
+      amount of engineering for this; forcing the sync isn't. Earlier
+      open GitHub issues (kirodotdev/Kiro #7806, #6880, #7005) about
+      usage-display staleness remain relevant context, just no longer
+      the only source we have on the mechanism itself.
+      **Practical effect, corrected:**
+      `credits_used_so_far` is cumulative *since the ticket's baseline*,
+      not incremental since the previous commit — `pre-commit` only ever
+      reads `credits_at_ticket_start`, it never rewrites it. So a
+      stale/lagging cache doesn't lose data, it just means an early
+      commit under a ticket can read `0.0000` while a later commit (once
+      the cache catches up) shows the real running total, which by then
+      already includes everything from every earlier commit on that
+      ticket. **The fix this implies:** anything that reports a ticket's
+      total cost (the DuckDB dashboard query in `docs/runbook.md`, or any
+      manual read of these logs) must take the *last/max* commit's
+      `credits_used_so_far` per ticket, never sum across commits —
+      summing would double-count, since each value already contains the
+      whole history. (Already fixed in `docs/runbook.md`'s dashboard
+      query: was `sum(...)`, now `max(...)`.)
+- [x] **Mitigation shipped:** `pre-commit` now writes a `credit_confidence`
+      field (`"high"`/`"low"`) on every tracking record — low whenever
+      the delta computed out to exactly `0.0000`, or fewer than 5 minutes
+      had passed since `current-ticket.json`'s baseline was set (using the
+      file's own mtime, no schema change needed). Confirmed by testing: a
+      commit made ~51 min after baseline, with a real non-zero delta,
+      correctly came back `"high"`.
+- **Two corrections on the research behind this**, worth keeping in mind
+  for anything gathered via web search rather than a direct page fetch:
+  - Kiro GitHub issue #8524 ("no way to export/programmatically access
+    per-response credit consumption") is real and says what it was quoted
+    as saying — but it is **not** marked duplicate. That claim came from
+    misreading a search snippet's UI chrome (a button label) as the
+    issue's status; the actual page just shows `pending-triage`. Fetch
+    the real page before repeating a status claim like that again.
+  - The "updated every 5 minutes" figure is the *account dashboard's*
+    documented cadence per that issue's own wording — it's *consistent
+    with*, but not *confirmed to be*, the same mechanism as the local
+    `state.vscdb` row we read (our one direct observation showed a ~30 min
+    gap before it updated, which a 5-min cadence doesn't contradict, but
+    doesn't prove either). Treat 5 min as a plausible floor, not a
+    verified fact about this specific file — that's why `pre-commit`'s
+    confidence check above doesn't just trust it blindly.
+- **Parked, not forgotten:** reconciling tracked credits against Kiro's
+  official daily per-user CSV report (written to S3) was suggested as a
+  validation step, but that report only exists once *Enterprise settings*
+  are turned on — which `docs/runbook.md` section 0 deliberately puts
+  *last* in the build order, after the workflow already works end to end.
+  Revisit this once that stage is actually reached, not before.
+- **Investigated and ruled out:** the third-party PyPI package `kiro-usage`
+  (real package, not fabricated — installed and tested directly via
+  `uv tool install kiro-usage`, not just read about). Its README claims
+  IDE tracking, but its own `--help` labels all metrics **"(CLI only)"**,
+  and its only data source is `~/.local/share/kiro-cli/data.sqlite3` — a
+  **different product's** database (Kiro CLI, a separate terminal tool),
+  not the Kiro IDE's `state.vscdb` this project reads from. Confirmed
+  neither that file nor a `kiro-cli` binary exist on this machine (IDE
+  only, via `/usr/bin/kiro`) — ran it, got empty output, traced it to
+  this rather than assuming a config/install problem. **Not usable for
+  this project as installed; our own `python3` read of `state.vscdb` in
+  `pre-commit` remains the only working local source.** Left installed
+  (harmless, `uv tool uninstall kiro-usage` to remove) in case Kiro CLI
+  ever enters the picture later.
+
+## Known gaps, already understood (not urgent)
+- `kiro-session-info` never existed — replaced with a real SQLite read
+  (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
+  and `docs/runbook.md` for the details.
+- AWS write access doesn't exist yet (`kiro-s3-readonly` is read-only) —
+  the S3 upload in `pre-commit`/`pre-push` and the PR-gate Lambda both
+  need a separate, not-yet-created write-capable role.
+- `company-policy.md` still references the old `atlassian`/`sonarqube`
+  MCP server names — stale against the current `atlassian-rovo`/`aws`
+  entries in `mcp.json`. Cosmetic, but worth reconciling.

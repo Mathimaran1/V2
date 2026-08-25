@@ -179,6 +179,34 @@ if [ -n "$CREDITS_NOW" ] && [ -n "$CREDITS_START" ]; then
   CREDITS_DELTA=$(awk -v now="$CREDITS_NOW" -v start="$CREDITS_START" 'BEGIN{printf "%.4f", now-start}')
 fi
 
+# 3b. Confidence flag: the usage cache backing CREDITS_NOW is periodically
+# synced, not live (confirmed by testing — see TODO.md), so a commit made
+# soon after the baseline was set can read a stale number and show 0.0000
+# even when real work happened. We don't have an exact, confirmed refresh
+# interval (Kiro's dashboard docs say ~5 min, but our own observed lag once
+# ran to ~30 min, so treat 5 min as a floor, not a guarantee) — so flag low
+# confidence whenever EITHER signal is present, erring toward under- rather
+# than over-claiming precision:
+#   - less than 5 min has passed since current-ticket.json's baseline was
+#     set (using the file's own mtime as a free proxy — nothing else writes
+#     to it besides the ask-ticket hook and post-checkout's reset)
+#   - the delta computed out to exactly 0, which is exactly the lag symptom
+# credits_used_so_far being cumulative-since-baseline (not per-commit — see
+# "Why max, not sum" further below in this doc) means a low-confidence
+# read here is always superseded by a later high-confidence one on this
+# ticket.
+CREDIT_CONFIDENCE="high"
+if [ "$CREDITS_DELTA" = "null" ]; then
+  CREDIT_CONFIDENCE="low"
+elif [ -f .kiro/current-ticket.json ]; then
+  BASELINE_SET_AT=$(stat -c %Y .kiro/current-ticket.json 2>/dev/null || echo 0)
+  NOW_EPOCH=$(date +%s)
+  ELAPSED=$((NOW_EPOCH - BASELINE_SET_AT))
+  if [ "$ELAPSED" -lt 300 ] || [ "$CREDITS_DELTA" = "0.0000" ]; then
+    CREDIT_CONFIDENCE="low"
+  fi
+fi
+
 # JSON-quote the session id, or fall back to null. NOTE: the old
 # ${VAR:+\"$VAR\"}${VAR:-null} one-liner pattern is broken when VAR IS set —
 # ":-null" then returns $VAR itself (not "null"), producing duplicated
@@ -199,6 +227,7 @@ cat > "$LOGFILE" << INNER_EOF
   "kiro_session_id": $SESSION_ID_JSON,
   "kiro_used": $([ -n "$SESSION_ID" ] && echo true || echo false),
   "credits_used_so_far": $CREDITS_DELTA,
+  "credit_confidence": "$CREDIT_CONFIDENCE",
   "dev": "$(git config user.email)",
   "branch": "$(git branch --show-current)",
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -259,6 +288,7 @@ pattern as the PR-gate Lambda.
   "kiro_session_id": "8f3a1c2e-...",
   "kiro_used": true,
   "credits_used_so_far": 42,
+  "credit_confidence": "high",
   "dev": "jane.doe@company.com",
   "branch": "PROJ-123-fix-login",
   "commit_time": "2026-08-24T10:15:00Z"
@@ -383,12 +413,25 @@ them by `ticket_id` with plain SQL — no need to load them into another
 database first:
 ```sql
 SELECT ticket_id,
-       sum(credits_used_so_far) AS total_credits,
+       max(credits_used_so_far) AS total_credits,
        max(commit_time)         AS last_commit,
        any_value(status)        AS latest_status
 FROM read_json_auto('s3://your-bucket/events/**/*.json')
 GROUP BY ticket_id;
 ```
+**Why `max`, not `sum`:** `credits_used_so_far` in each commit's tracking JSON is
+*cumulative since the ticket's baseline*, not incremental since the previous
+commit — `pre-commit` only ever reads `credits_at_ticket_start`, it never
+rewrites it, so every commit under the same ticket recomputes the delta
+against the same fixed starting point. That means each later commit's number
+already includes everything from every earlier one on that ticket; the most
+recent commit's value already *is* the ticket total. `sum`ing them would
+double- (or many-times-) count, especially on a long-lived ticket with lots
+of commits. This also means a commit made shortly after the baseline is set
+can show `0.0000` if the underlying usage-tracking cache hasn't synced yet
+(confirmed by testing — see `TODO.md`) — that's fine and self-corrects, since
+it's the *latest* commit's number that matters, not any one commit in
+isolation.
 This one query can pull together webhook events, the git commit tracking
 logs, and Kiro's usage reports, all at once, since they're all just files
 in S3.
@@ -426,6 +469,7 @@ Every commit writes this (see section 1 for the full script):
   "kiro_session_id": "8f3a1c2e-...",
   "kiro_used": true,
   "credits_used_so_far": 42,
+  "credit_confidence": "high",
   "dev": "jane.doe@company.com",
   "branch": "PROJ-123-fix-login",
   "commit_time": "2026-08-24T10:15:00Z"
