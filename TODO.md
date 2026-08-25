@@ -208,19 +208,28 @@ been made yet. Not bugs — just don't assume any of these are "done."
   also land in (see the design gap above, which this exact mixing is what
   surfaced it). When testing hooks going forward, answer the ask-ticket
   hook with something obviously synthetic (e.g. `TEST-000`) instead.
-- [ ] **Pending cleanup, deliberately batched, not done yet:** two more
-      `"none"`-tagged test commits landed after this convention was
-      written (`.kiro-tracking/none-1787639871.json`,
-      `.kiro-tracking/none-1787639997.json` — habit is easy to slip on
-      even right after deciding not to). Do this cleanup on `master`
-      only, not the leftover test branches (`ANG-999-test-branch`,
-      `ANG-998-test-branch`) — three real commits from those branches got
-      cherry-picked onto `master` (see the cherry-pick/hooks note below),
-      so `master` is now the canonical history; the test branches are
-      safe to delete once that's done, nothing unique left on them worth
-      keeping (their only remaining unique commit is a throwaway "second
-      test commit" with a `some-file.txt` artifact, deliberately not
-      brought over).
+- [x] **Cleanup done 2026-08-25, on `master` only, two rewrite passes.**
+      First pass stripped everything expected: `none-*`, `TEST-000-*`,
+      `TESTSWITCH-*`, `TESTREOPEN-*` tracking files plus the two dummy
+      `switch-test.txt`/`reopen-test.txt` files, with `--prune-empty`
+      dropping the six commits that were pure test simulation (nothing
+      real left once their files were stripped). Verifying the result
+      surfaced two more patterns not in the original plan — worth noting
+      since they'd have been missed by just following the list above
+      literally: an `ANG-999-...json` file (branch-name-fallback noise
+      from the now-deleted `ANG-999-test-branch`, not a real ticket), and
+      a `-1787640645.json` file (the empty-`ticket_id` bug's own evidence
+      artifact — kept at first as "legitimate history," reconsidered
+      since the bug is already fully documented in prose here and in the
+      commit that fixed it, so the raw artifact was clutter, not
+      evidence anyone needs). Second pass stripped both. `.kiro-tracking/`
+      now holds only `.gitkeep`. Both throwaway branches deleted
+      (`ANG-999-test-branch`, `ANG-998-test-branch`) — everything real
+      from them is already on `master` via the earlier cherry-pick.
+      Two safety tags exist if any of this ever needs to be checked
+      against the pre-cleanup state: `backup-before-history-rewrite`
+      (this morning's first rewrite) and `backup-before-cleanup-2` (just
+      before today's second/third passes).
 
 ## Design gap: amend/rebase creates extra stale tracking files
 - [ ] **Already hit for real earlier today, never recorded until now.**
