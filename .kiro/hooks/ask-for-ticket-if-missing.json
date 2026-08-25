@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Ask for ticket if missing",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "agent",
+        "prompt": "First check .kiro/current-ticket.json. If it already holds a non-empty ticket_id, do nothing extra and proceed with the user's request normally. If it is empty, this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) — so branch on the current message: (1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question — read the current credit total by running exactly this command (do not improvise another method — the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; print(json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage'])\"` — use its stdout output verbatim as the number, do not read it off of any other command's raw/truncated output. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <that number>} into .kiro/current-ticket.json, briefly confirm it's saved, then continue handling the rest of their request normally — do not ask again. (2) Otherwise, the message is a normal work request, not an answer to a prior question — stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per branch (1). Caveat: if current-ticket.json already holds a different, non-empty ticket_id (i.e. the dev is switching tickets without switching git branch, so post-checkout never cleared it), ask the user to confirm before overwriting the baseline — otherwise credits from the two tickets will blend together in the delta calculation."
+      },
+      "enabled": true
+    }
+  ]
+}

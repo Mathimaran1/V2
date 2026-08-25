@@ -1,0 +1,5 @@
+#!/bin/bash
+if [ "$3" = "1" ]; then
+  echo "{}" > .kiro/current-ticket.json
+  echo "New branch — Kiro will ask for the ticket next time."
+fi

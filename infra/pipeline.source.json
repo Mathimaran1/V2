@@ -1,0 +1,17 @@
+{
+  "_comment": "Single source of truth for where CodePipeline pulls from. Flip 'provider' and fill in the matching block when CodeCommit access exists — nothing else in the codebase (hooks, Lambdas, dashboard, docs) reads from anywhere but this file.",
+
+  "provider": "github",
+
+  "github": {
+    "owner": "your-org",
+    "repo": "v1",
+    "branch": "main",
+    "connectionArn": "arn:aws:codestar-connections:REGION:ACCOUNT_ID:connection/CONNECTION_ID"
+  },
+
+  "codecommit": {
+    "repositoryName": "v1",
+    "branch": "main"
+  }
+}

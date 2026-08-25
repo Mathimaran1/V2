@@ -1,0 +1,11 @@
+#!/bin/bash
+# NOTE: must read one whole file, not `cat *.json | tail -1` — pre-commit writes
+# each record pretty-printed across multiple lines, so `tail -1` on concatenated
+# files grabs a lone trailing "}" and jq fails on it (confirmed by testing:
+# both trailers below came out empty, not even their "none"/"n/a" fallback).
+LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
+SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+echo "" >> "$1"
+echo "Kiro-Session: $SESSION_ID" >> "$1"
+echo "Kiro-Credits: $CREDITS" >> "$1"

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "atlassian": {
+      "url": "https://mcp.atlassian.com/v1/sse",
+      "disabled": false,
+      "autoApprove": ["getJiraIssue", "searchJiraIssuesUsingJql"]
+    },
+    "sonarqube": {
+      "url": "https://your-sonarqube-host/mcp",
+      "disabled": false,
+      "autoApprove": ["getQualityGateStatus", "getProjectIssues"]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+# Local Kiro session state — never shared, resets per branch
+.kiro/current-ticket.json
+
+# Sonar scan scratch output
+/tmp/sonar-scan.log
+
+# OS / editor noise
+.DS_Store
+*.swp
+
+# Local Claude Code settings — machine-specific, not project config
+.claude/

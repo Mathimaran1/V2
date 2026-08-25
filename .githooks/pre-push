@@ -1,0 +1,29 @@
+#!/bin/bash
+# Mode is a single flag you control — start in "warn", switch to "block" once trusted
+MODE=$(aws ssm get-parameter --name /kiro-tracking/sonarqube-gate-mode \
+  --query 'Parameter.Value' --output text 2>/dev/null || echo "warn")
+
+TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
+
+# Run the scan and ask SonarQube for the quality gate result
+sonar-scanner -Dsonar.projectKey=YOUR_PROJECT \
+  -Dsonar.host.url=https://your-sonarqube-host \
+  -Dsonar.token="$SONARQUBE_TOKEN" > /tmp/sonar-scan.log 2>&1
+
+GATE_STATUS=$(curl -s -u "$SONARQUBE_TOKEN": \
+  "https://your-sonarqube-host/api/qualitygates/project_status?projectKey=YOUR_PROJECT" \
+  | jq -r '.projectStatus.status')
+
+# Record the result alongside the commit log, regardless of pass/fail
+echo "{\"ticket_id\": \"$TICKET_ID\", \"gate_status\": \"$GATE_STATUS\", \"time\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+  > ".kiro-tracking/${TICKET_ID}-gate-$(date +%s).json"
+aws s3 cp ".kiro-tracking/${TICKET_ID}-gate-"*.json "s3://your-tracking-bucket/tracking/" 2>/dev/null
+
+if [ "$GATE_STATUS" != "OK" ]; then
+  if [ "$MODE" = "block" ]; then
+    echo "❌ SonarQube gate failed — push blocked. See /tmp/sonar-scan.log"
+    exit 1
+  else
+    echo "⚠️ SonarQube gate failed — push allowed (warn mode). Please fix soon."
+  fi
+fi

@@ -1,0 +1,44 @@
+#!/bin/bash
+# 1. Check for passwords/keys first — stops the commit if it finds any
+gitleaks protect --staged || exit 1
+
+# 2. Find the ticket ID: saved file -> branch name -> ask in terminal
+TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
+SOURCE="kiro_session"
+
+if [ -z "$TICKET_ID" ]; then
+  TICKET_ID=$(git branch --show-current | grep -oE '^[A-Z]+-[0-9]+')
+  SOURCE="branch_name"
+fi
+
+if [ -z "$TICKET_ID" ]; then
+  read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID
+  SOURCE="manual_entry"
+fi
+
+# 3. Get credit numbers, if a real Kiro session exists
+SESSION_ID=$(kiro-session-info --field session_id 2>/dev/null)
+CREDITS_NOW=$(kiro-session-info --field credits_total 2>/dev/null)
+CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
+
+# 4. Write the record and include it in this same commit
+mkdir -p .kiro-tracking
+LOGFILE=".kiro-tracking/${TICKET_ID}-$(date +%s).json"
+cat > "$LOGFILE" << INNER_EOF
+{
+  "ticket_id": "$TICKET_ID",
+  "source_of_ticket_id": "$SOURCE",
+  "kiro_session_id": ${SESSION_ID:+\"$SESSION_ID\"}${SESSION_ID:-null},
+  "kiro_used": $([ -n "$SESSION_ID" ] && echo true || echo false),
+  "credits_used_so_far": $([ -n "$CREDITS_NOW" ] && [ -n "$CREDITS_START" ] && echo $((CREDITS_NOW - CREDITS_START)) || echo null),
+  "dev": "$(git config user.email)",
+  "branch": "$(git branch --show-current)",
+  "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+INNER_EOF
+git add "$LOGFILE"
+
+# 5. Also save a copy to S3, so it's safe even if something happens locally
+aws s3 cp "$LOGFILE" "s3://your-tracking-bucket/tracking/" 2>/dev/null || \
+  echo "hook_status=failed" >> .kiro-tracking/hook-health.log
+echo "hook_status=ok" >> .kiro-tracking/hook-health.log
