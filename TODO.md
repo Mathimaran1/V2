@@ -232,20 +232,47 @@ been made yet. Not bugs — just don't assume any of these are "done."
       before today's second/third passes).
 
 ## Design gap: amend/rebase creates extra stale tracking files
-- [ ] **Already hit for real earlier today, never recorded until now.**
-      `git commit --amend` re-runs `pre-commit` on every amend, and
-      `pre-commit` unconditionally writes a fresh `.kiro-tracking/*.json`
-      file each time it runs — so three amends in a row produced three
-      tracking files for what's actually one final commit. Happened
-      literally: 3 duplicate files, cleaned up by hand (`git rm` +
-      `--amend --no-verify` to avoid spawning a 4th). A dashboard summing
-      or maxing blindly over all files would overcount, since stale
-      records from abandoned amend/rebase states don't disappear on
-      their own. **Proposed fix, not built or tested:** store the commit
-      SHA inside each tracking record at write time; have the dashboard
-      only count records whose SHA still exists in git history — an
-      amended-away record's SHA no longer resolves, so it's naturally
-      excluded without needing manual cleanup.
+- [ ] **Already hit for real (3 duplicate files from repeated `--amend`,
+      cleaned up by hand at the time). Original proposed fix has a real
+      flaw, found while actually designing it rather than just building
+      it as stated — corrected design below, still not built.**
+      `git commit --amend` re-runs `pre-commit` on every amend, which
+      unconditionally writes a fresh `.kiro-tracking/*.json` file each
+      time — three amends produced three files for one final commit. A
+      dashboard summing or maxing blindly over all of them would
+      overcount, since stale records from abandoned amend/rebase states
+      don't disappear on their own.
+      **Why the original fix ("store the commit SHA in the tracking
+      record, dashboard only counts records whose SHA still exists")
+      doesn't actually work as stated:** `pre-commit` runs *before* the
+      commit object exists — it cannot know its own future SHA. Writing
+      `commit_sha` at that point is circular; there's nothing correct to
+      put there. And "SHA still exists in git" isn't quite the right
+      check anyway — an amended-away commit's SHA can remain a valid,
+      readable git object for a while (until garbage collection), so
+      *existence* doesn't mean *still part of the real history*; the
+      real check is whether the SHA is still an ancestor of (or equal
+      to) the branch tip.
+      **Corrected design, not built or tested:** the SHA can only be
+      known correctly *after* the commit exists, so this needs a new
+      `post-commit` hook (not `pre-commit`), and it must patch the SHA
+      in *without* amending — amending here would just recreate the
+      exact problem being solved. Concretely: `post-commit` reads
+      `git rev-parse HEAD` for the real SHA, finds which tracking file(s)
+      this commit touched (`git show --name-only HEAD -- .kiro-tracking/`
+      — no special pointer needed, git already knows), patches
+      `commit_sha` into a local *copy* of that file's content, and
+      re-uploads that patched copy to S3 under the same key — overwriting
+      `pre-commit`'s earlier upload of the same file, without ever
+      touching git itself. The git-tracked file in the repo stays as
+      `pre-commit` wrote it (no SHA, or a `null` placeholder); only the
+      S3 mirror — what the dashboard actually reads — carries the real
+      SHA. At query time, the dashboard's exclusion check should be
+      `git merge-base --is-ancestor <sha> <branch>` (or the GitHub API
+      equivalent), not a bare existence check, for the reason above.
+      Not built: needs the S3 write role that doesn't exist yet anyway
+      (see "Known gaps" below), so there's nothing to test against
+      end-to-end right now regardless of how well-designed this is.
 
 ## Design gap: mid-session ticket switch, no branch change, goes undetected
 - [x] **Fixed and tested 2026-08-25 — see the episode_id entry above,
