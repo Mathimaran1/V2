@@ -16,10 +16,73 @@ if [ -z "$TICKET_ID" ]; then
   SOURCE="manual_entry"
 fi
 
-# 3. Get credit numbers, if a real Kiro session exists
-SESSION_ID=$(kiro-session-info --field session_id 2>/dev/null)
-CREDITS_NOW=$(kiro-session-info --field credits_total 2>/dev/null)
+# 3. Get credit numbers from the real local sources (no kiro-session-info —
+#    that command doesn't exist; confirmed by inspecting the actual files):
+#    - session id: most recently modified ~/.kiro/sessions/*/*/session.json
+#    - credits:    ~/.config/Kiro/User/globalStorage/state.vscdb, key
+#                   "kiro.kiroAgent" (JSON) -> "kiro.resourceNotifications
+#                   .usageState".usageBreakdowns[0].currentUsage
+SESSION_FILE=$(ls -t "$HOME"/.kiro/sessions/*/*/session.json 2>/dev/null | head -1)
+SESSION_ID=$(jq -r '.id // empty' "$SESSION_FILE" 2>/dev/null)
+
+CREDITS_NOW=$(python3 -c "
+import sqlite3, json, sys
+try:
+    con = sqlite3.connect('$HOME/.config/Kiro/User/globalStorage/state.vscdb')
+    row = con.execute(\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\").fetchone()
+    val = row[0]
+    if isinstance(val, bytes):
+        val = val.decode('utf-8')
+    usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
+    print(usage)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null)
 CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
+
+# Credits are decimals (e.g. 229.72) — bash's $(( )) only does integers and
+# would silently truncate/break here, so use awk for the subtraction instead.
+CREDITS_DELTA="null"
+if [ -n "$CREDITS_NOW" ] && [ -n "$CREDITS_START" ]; then
+  CREDITS_DELTA=$(awk -v now="$CREDITS_NOW" -v start="$CREDITS_START" 'BEGIN{printf "%.4f", now-start}')
+fi
+
+# 3b. Confidence flag: the usage cache backing CREDITS_NOW is periodically
+# synced, not live (confirmed by testing — see TODO.md), so a commit made
+# soon after the baseline was set can read a stale number and show 0.0000
+# even when real work happened. We don't have an exact, confirmed refresh
+# interval (Kiro's dashboard docs say ~5 min, but our own observed lag once
+# ran to ~30 min, so treat 5 min as a floor, not a guarantee) — so flag low
+# confidence whenever EITHER signal is present, erring toward under- rather
+# than over-claiming precision:
+#   - less than 5 min has passed since current-ticket.json's baseline was
+#     set (using the file's own mtime as a free proxy — nothing else writes
+#     to it besides the ask-ticket hook and post-checkout's reset)
+#   - the delta computed out to exactly 0, which is exactly the lag symptom
+# credits_used_so_far being cumulative-since-baseline (not per-commit —
+# see the max-not-sum note in docs/runbook.md) means a low-confidence read
+# here is always superseded by a later high-confidence one on this ticket.
+CREDIT_CONFIDENCE="high"
+if [ "$CREDITS_DELTA" = "null" ]; then
+  CREDIT_CONFIDENCE="low"
+elif [ -f .kiro/current-ticket.json ]; then
+  BASELINE_SET_AT=$(stat -c %Y .kiro/current-ticket.json 2>/dev/null || echo 0)
+  NOW_EPOCH=$(date +%s)
+  ELAPSED=$((NOW_EPOCH - BASELINE_SET_AT))
+  if [ "$ELAPSED" -lt 300 ] || [ "$CREDITS_DELTA" = "0.0000" ]; then
+    CREDIT_CONFIDENCE="low"
+  fi
+fi
+
+# JSON-quote the session id, or fall back to null. NOTE: the old
+# ${VAR:+\"$VAR\"}${VAR:-null} one-liner pattern is broken when VAR IS set —
+# ":-null" then returns $VAR itself (not "null"), producing duplicated
+# output like "sess_x"sess_x instead of "sess_x". Use an explicit if instead.
+if [ -n "$SESSION_ID" ]; then
+  SESSION_ID_JSON="\"$SESSION_ID\""
+else
+  SESSION_ID_JSON="null"
+fi
 
 # 4. Write the record and include it in this same commit
 mkdir -p .kiro-tracking
@@ -28,9 +91,10 @@ cat > "$LOGFILE" << INNER_EOF
 {
   "ticket_id": "$TICKET_ID",
   "source_of_ticket_id": "$SOURCE",
-  "kiro_session_id": ${SESSION_ID:+\"$SESSION_ID\"}${SESSION_ID:-null},
+  "kiro_session_id": $SESSION_ID_JSON,
   "kiro_used": $([ -n "$SESSION_ID" ] && echo true || echo false),
-  "credits_used_so_far": $([ -n "$CREDITS_NOW" ] && [ -n "$CREDITS_START" ] && echo $((CREDITS_NOW - CREDITS_START)) || echo null),
+  "credits_used_so_far": $CREDITS_DELTA,
+  "credit_confidence": "$CREDIT_CONFIDENCE",
   "dev": "$(git config user.email)",
   "branch": "$(git branch --show-current)",
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
