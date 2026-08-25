@@ -155,6 +155,23 @@ been made yet. Not bugs — just don't assume any of these are "done."
   ever enters the picture later.
 
 ## Design gap: baseline resets aren't tracked as distinct units — affects ANY reopened ticket, not just `"none"`
+- [~] **IN PROGRESS, deliberately partial — episode_id has only ONE of its
+      two required triggers built, do not treat as done until both exist.**
+      A fresh `episode_id` needs to be created whenever a baseline resets,
+      and there are two separate things that should cause that: (1) a
+      branch switch, via `post-checkout` clearing the file — BUILT, this
+      is what the code below does; (2) a mid-session ticket switch with NO
+      branch change (see the separate design-gap section below,
+      "mid-session ticket switch... goes undetected") — NOT BUILT. Until
+      (2) exists, the case that motivated this whole fix — planning ahead
+      on a different ticket without switching branches — still silently
+      misattributes credits, just to the wrong *episode* now instead of
+      the wrong *ticket*. Building episode_id generation alone does not
+      close this gap; it only fixes the reopened-ticket case. Do not mark
+      this section done, or move on to the reopen end-to-end test as if
+      the fix is complete, until item 7 (mid-session detection) is also
+      built — that test would only exercise trigger (1) and give false
+      confidence about (2).
 - [ ] **Broadened from an earlier `"none"`-specific version of this note
       (still not fixed — only ever documented, nothing built yet).** The
       `max()`-not-`sum()`
