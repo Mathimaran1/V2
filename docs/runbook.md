@@ -288,9 +288,14 @@ cat > "$LOGFILE" << INNER_EOF
 INNER_EOF
 git add "$LOGFILE"
 
-# 5. Also save a copy to S3, so it's safe even if something happens locally
-aws s3 cp "$LOGFILE" "s3://your-tracking-bucket/tracking/" 2>/dev/null || \
-  echo "hook_status=failed" >> .kiro-tracking/hook-health.log
+# 5. S3 upload removed 2026-08-25 — the AWS role is read-only, this line
+# was failing every single commit (see hook-health.log's alternating
+# ok/failed before this change). The commit message trailers (see
+# commit-msg) are now the durable, authoritative record — git push and
+# reading commit messages back don't need any AWS write access at all.
+# This local JSON file stays as a convenience copy, not the source of
+# truth. Health logging kept, unconditionally "ok" now — nothing here
+# can fail once the S3 attempt is gone.
 echo "hook_status=ok" >> .kiro-tracking/hook-health.log
 ```
 **Prerequisite:** this now needs `python3` (standard on most dev machines) in addition to `jq`, `gitleaks`, and the AWS CLI — no `sqlite3` CLI binary required, since Python's built-in `sqlite3` module reads the file directly.
