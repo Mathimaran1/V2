@@ -377,11 +377,19 @@ if [ -z "$REAL_CONTENT" ]; then
 fi
 
 LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
-SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+TICKET=$(jq -r '.ticket_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+EPISODE=$(jq -r '.episode_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
 CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+CONFIDENCE=$(jq -r '.credit_confidence // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+SOURCE=$(jq -r '.source_of_ticket_id // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
 echo "" >> "$1"
-echo "Kiro-Session: $SESSION_ID" >> "$1"
+echo "Kiro-Ticket: $TICKET" >> "$1"
+echo "Kiro-Episode: $EPISODE" >> "$1"
 echo "Kiro-Credits: $CREDITS" >> "$1"
+echo "Kiro-Confidence: $CONFIDENCE" >> "$1"
+echo "Kiro-Session: $SESSION_ID" >> "$1"
+echo "Kiro-Source: $SOURCE" >> "$1"
 ```
 
 ### One-time step every dev has to do
@@ -561,12 +569,16 @@ Every commit writes this (see section 1 for the full script):
 
 ### The Kiro tag mechanism, step by step
 1. **At commit time**, `commit-msg` reads the log file above and appends
-   two lines onto the real commit message:
+   six lines onto the real commit message:
    ```
    PROJ-123: fix login bug
 
-   Kiro-Session: 8f3a1c2e-...
+   Kiro-Ticket: PROJ-123
+   Kiro-Episode: ep_68aabbcc1a2b3c
    Kiro-Credits: 42
+   Kiro-Confidence: high
+   Kiro-Session: 8f3a1c2e-...
+   Kiro-Source: kiro_session
    ```
 2. This tag can only be produced by a real local hook run — nothing
    generates it remotely, so a commit made without hooks configured has

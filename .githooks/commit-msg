@@ -14,8 +14,16 @@ if [ -z "$REAL_CONTENT" ]; then
 fi
 
 LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
-SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+TICKET=$(jq -r '.ticket_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+EPISODE=$(jq -r '.episode_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
 CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+CONFIDENCE=$(jq -r '.credit_confidence // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
+SOURCE=$(jq -r '.source_of_ticket_id // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
 echo "" >> "$1"
-echo "Kiro-Session: $SESSION_ID" >> "$1"
+echo "Kiro-Ticket: $TICKET" >> "$1"
+echo "Kiro-Episode: $EPISODE" >> "$1"
 echo "Kiro-Credits: $CREDITS" >> "$1"
+echo "Kiro-Confidence: $CONFIDENCE" >> "$1"
+echo "Kiro-Session: $SESSION_ID" >> "$1"
+echo "Kiro-Source: $SOURCE" >> "$1"
