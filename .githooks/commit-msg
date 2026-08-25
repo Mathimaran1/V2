@@ -1,8 +1,18 @@
 #!/bin/bash
-# NOTE: must read one whole file, not `cat *.json | tail -1` — pre-commit writes
-# each record pretty-printed across multiple lines, so `tail -1` on concatenated
-# files grabs a lone trailing "}" and jq fails on it (confirmed by testing:
-# both trailers below came out empty, not even their "none"/"n/a" fallback).
+# Guard: don't rescue an empty message into looking non-empty. Confirmed by
+# testing (found while adding a commit.template): git's own "abort on empty
+# message" check runs AFTER commit-msg, using whatever this hook produces —
+# so unconditionally appending trailers below meant a blank/comments-only
+# editor buffer (nothing typed, or a template left unfilled) still
+# "succeeded" with a commit whose only content was these two trailer lines,
+# silently defeating that safety net. If there's no real message content
+# once comments and blank lines are stripped, leave the file untouched so
+# git's own check still fires correctly.
+REAL_CONTENT=$(grep -v '^#' "$1" | grep -v '^[[:space:]]*$')
+if [ -z "$REAL_CONTENT" ]; then
+  exit 0
+fi
+
 LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
 SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
 CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)

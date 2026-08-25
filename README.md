@@ -29,10 +29,14 @@ See `docs/runbook.md` section 0 for the full reasoning behind this order.
 git init                              # if not already a repo
 git config core.hooksPath .githooks
 chmod +x .githooks/*
+git config commit.template .gitmessage
 ```
 
-Every dev on the project has to run the `git config` line once, or none of
-the tracking hooks fire on their machine.
+Every dev on the project has to run the `git config core.hooksPath` line
+once, or none of the tracking hooks fire on their machine. The
+`commit.template` line is optional but recommended — pre-fills a
+`Co-authored-by:` line in your editor for pair-programming commits, so it's
+one word to fill in rather than something to remember (see `.gitmessage`).
 
 ## What still needs to be filled in before this is live
 
