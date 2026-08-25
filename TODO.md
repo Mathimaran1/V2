@@ -154,6 +154,38 @@ been made yet. Not bugs — just don't assume any of these are "done."
   (harmless, `uv tool uninstall kiro-usage` to remove) in case Kiro CLI
   ever enters the picture later.
 
+## Design gap: `"none"` isn't a single ticket, and neither `max()` nor `sum()` handles it right
+- [ ] **Found while cleaning up today's test data.** The `max()`-not-`sum()`
+      fix (see above) assumes a ticket has *one continuous baseline* for its
+      whole life — true for a real Jira ticket, false for `"none"`.
+      `"none"` gets a **fresh baseline every time** someone answers "none"
+      (today's hook testing, then some unrelated no-ticket work next month,
+      etc.) — each restart is independent. So:
+      - `sum(credits_used_so_far) WHERE ticket_id='none'` double-counts,
+        same as any other ticket (each commit's value already includes
+        everything since ITS baseline).
+      - `max(credits_used_so_far) WHERE ticket_id='none'` is *worse* than
+        for a real ticket — it doesn't just risk being stale, it silently
+        **drops every no-ticket work session except whichever one happened
+        to reach the single highest cumulative number**, discarding the
+        rest entirely.
+      Neither aggregation is correct for `"none"` as currently designed.
+      Not fixed yet — would need something like grouping by
+      (ticket_id, baseline-epoch) instead of just ticket_id before
+      `"none"`'s totals can be trusted, e.g. detecting baseline resets via
+      gaps/drops in `credits_used_so_far` within the same ticket_id, or
+      writing a baseline-session id into each record at hook-set time.
+      Low urgency — nothing currently depends on `"none"`'s aggregate
+      total for anything real — but don't build a report on it as-is.
+
+## Testing convention
+- **Use a distinct ticket ID for hook testing, not `"none"`.** `"none"` is
+  a real category for actual no-ticket work, not a test sentinel — reusing
+  it for testing mixes throwaway data into a bucket real future work will
+  also land in (see the design gap above, which this exact mixing is what
+  surfaced it). When testing hooks going forward, answer the ask-ticket
+  hook with something obviously synthetic (e.g. `TEST-000`) instead.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
