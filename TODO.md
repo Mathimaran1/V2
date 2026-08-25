@@ -223,6 +223,22 @@ been made yet. Not bugs — just don't assume any of these are "done."
       test commit" with a `some-file.txt` artifact, deliberately not
       brought over).
 
+## Design gap: amend/rebase creates extra stale tracking files
+- [ ] **Already hit for real earlier today, never recorded until now.**
+      `git commit --amend` re-runs `pre-commit` on every amend, and
+      `pre-commit` unconditionally writes a fresh `.kiro-tracking/*.json`
+      file each time it runs — so three amends in a row produced three
+      tracking files for what's actually one final commit. Happened
+      literally: 3 duplicate files, cleaned up by hand (`git rm` +
+      `--amend --no-verify` to avoid spawning a 4th). A dashboard summing
+      or maxing blindly over all files would overcount, since stale
+      records from abandoned amend/rebase states don't disappear on
+      their own. **Proposed fix, not built or tested:** store the commit
+      SHA inside each tracking record at write time; have the dashboard
+      only count records whose SHA still exists in git history — an
+      amended-away record's SHA no longer resolves, so it's naturally
+      excluded without needing manual cleanup.
+
 ## Design gap: mid-session ticket switch, no branch change, goes undetected
 - [ ] **New, not previously proposed in this project despite how it might
       read — checked the actual hook file before writing this down.** If
