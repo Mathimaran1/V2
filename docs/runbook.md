@@ -9,7 +9,7 @@ This explains every file we're creating, and the full step-by-step flow, in plai
 Don't build everything in section 1 at once. This is the order that
 actually works, each stage depending on the one before it:
 
-1. **Steering (rules)** — write `.kiro/steering/company-policy.md` first.
+1. **Steering (rules)** — write `.kiro/steering/aidlc-git-conventions.md` first.
    No tooling needed, just tells Kiro your conventions.
 2. **MCP to Jira (connect)** — set up `.kiro/settings/mcp.json` so Kiro
    can actually read tickets. Nothing downstream works without this.
@@ -18,8 +18,8 @@ actually works, each stage depending on the one before it:
    what makes "which ticket" a natural question to ask, not a
    bolt-on step.
 4. **Hooks (auto-update Jira + auto-lint)** — only now add the
-   automation: `ask-for-ticket-if-missing`, `post-checkout`, `pre-commit`,
-   `commit-msg` (all in section 1 below).
+   automation: `aidlc-ask-for-ticket-if-missing`, `aidlc-bootstrap-git-hooks`,
+   `post-checkout`, `pre-commit`, `commit-msg` (all in section 1 below).
 5. **Powers** — before building any custom SonarQube or Jira
    integration by hand, check Kiro's Powers catalog first. If a
    Jira or SonarQube power already exists, install it instead of
@@ -38,21 +38,39 @@ toggle in the Kiro admin console.
 
 ## 1. The files, in the order they get made
 
-### `.kiro/steering/company-policy.md`
+### `.kiro/steering/aidlc-git-conventions.md`
 **Who makes it:** you, one time, saved in the project.
 **What it does:** tells Kiro the team's rules automatically, so no one has to repeat them.
 ```markdown
 ---
 inclusion: always
 ---
-# Company Policy — Kiro Usage Rules
+# AI DLC Git Conventions — Kiro Usage Rules
 
 ## Ticket linking
 - Every plan must mention its Jira ticket ID (e.g. PROJ-123).
 - Every commit message must start with "PROJ-123: short description".
 
+## Commit message trailer format
+Every commit gets six machine-readable trailers, stamped automatically
+by `.githooks/commit-msg` — nothing to type by hand:
+```
+Kiro-Ticket: PROJ-123
+Kiro-Episode: ep_68aabbcc1a2b3c
+Kiro-Credits: 42
+Kiro-Confidence: high
+Kiro-Session: 8f3a1c2e-...
+Kiro-Source: kiro_session
+```
+`none`/`n/a` fallbacks apply when a field can't be resolved.
+
+## Credit calculation rule
+`Kiro-Credits` is cumulative *within one episode*, not incremental per
+commit. Take the MAX per `Kiro-Episode`, then SUM those maxes per
+ticket — never sum raw `Kiro-Credits` across commits directly.
+
 ## Approved tools
-- Only use the "atlassian" and "sonarqube" connections already set up
+- Only use the "atlassian-rovo" and "aws" connections already set up
   in .kiro/settings/mcp.json.
 
 ## Workflow
@@ -62,6 +80,12 @@ inclusion: always
 ## Commit hygiene
 - Never commit passwords, keys, or .env files.
 ```
+(Consolidated 2026-08-25 from the original `company-policy.md` — same
+core rules, renamed, plus the trailer-format and credit-calculation
+rules made explicit as steering content instead of living only in
+`commit-msg` and this doc. Also fixed the approved-tools names, which
+had drifted stale against `mcp.json`'s real `atlassian-rovo`/`aws`
+entries.)
 
 ### `.kiro/settings/mcp.json`
 **Who makes it:** you, one time.
@@ -96,7 +120,7 @@ inclusion: always
   not part of the steady-state schema, gone again as soon as that
   exchange resolves either way.
 
-### `.kiro/hooks/ask-for-ticket-if-missing.json`
+### `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`
 **Who makes it:** you, one time — either through Kiro's Agent Hooks panel ("+ Create Hook"), or hand-written directly in this schema (confirmed: Kiro picks up hand-written files in `.kiro/hooks/` on its own, no UI step required, as long as the shape below is matched exactly).
 **What it does:** two jobs in one hook, since both need to fire on every prompt. (1) Asks for the ticket ID when nothing is saved yet (CASE A below). (2) Notices when a dev is planning/working on a *different* ticket than the one saved, without having switched branches — `post-checkout` only clears the file on an actual branch switch, so without this, that scenario silently misattributes credits (CASE B below). Both cases end in a fresh `credits_at_ticket_start` baseline and `episode_id` — a branch switch and a mid-session switch are the two things that should ever start a new episode; this hook is what makes the second one actually happen instead of just being a documented gap (see `TODO.md`).
 **Note:** this is Kiro's actual hook schema, confirmed by inspecting what the Agent Hooks UI itself writes to disk — an earlier draft of this file used a made-up shape (`when`/`then`/`promptSubmitted`/`agentAction`) that Kiro silently ignored. If you're adding more hooks later, match this shape, not that one.

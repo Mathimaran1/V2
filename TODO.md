@@ -31,12 +31,13 @@ been made yet. Not bugs — just don't assume any of these are "done."
       verified 2026-08-25** — asked Kiro to list Jira projects and got
       real data back from `teamlease-tech.atlassian.net` (13 projects:
       ALCS, ANG, BENEFITAPP, DLK, GTMS, GTMS1, HCM, HCMDWS, HH, HI, HT,
-      JP, PL). `PROJ` in `company-policy.md`'s `PROJ-123` example was
-      confirmed to be just a placeholder, not a real key. Real project
-      is **ANG** (ALCS-NG) — swap `PROJ-123` → `ANG-123` in
-      `company-policy.md` before the ticket-linking rule is actually
-      followable. Deliberately not touching Jira/this file further for
-      now — revisit when ready.
+      JP, PL). `PROJ` in `company-policy.md`'s (renamed 2026-08-25 to
+      `.kiro/steering/aidlc-git-conventions.md`, see the naming-cleanup
+      entry below) `PROJ-123` example was confirmed to be just a
+      placeholder, not a real key. Real project is **ANG** (ALCS-NG) —
+      swap `PROJ-123` → `ANG-123` in `aidlc-git-conventions.md` before
+      the ticket-linking rule is actually followable. Deliberately not
+      touching Jira/this file further for now — revisit when ready.
 
 ## Found by actually testing the hooks end-to-end (2026-08-25)
 - [x] **`.kiro/hooks/ask-ticket.json` used a made-up schema and never
@@ -44,9 +45,10 @@ been made yet. Not bugs — just don't assume any of these are "done."
       Hooks UI writes to disk) is `{version, hooks: [{name, trigger,
       action: {type, prompt}, enabled}]}`, not the `when`/`then`/
       `promptSubmitted`/`agentAction` shape this repo had. Fixed: real
-      file is now `.kiro/hooks/ask-for-ticket-if-missing.json`; confirmed
-      hand-written files in `.kiro/hooks/` are picked up on their own, no
-      need to create hooks through the UI every time.
+      file is now `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`
+      (renamed again 2026-08-25, see the naming-cleanup entry below);
+      confirmed hand-written files in `.kiro/hooks/` are picked up on
+      their own, no need to create hooks through the UI every time.
 - [x] **The ask-then-save flow needs two prompts, not one.** A
       `UserPromptSubmit` hook can't ask a question and then wait for the
       reply within a single turn — the original instruction assumed it
@@ -409,8 +411,13 @@ been made yet. Not bugs — just don't assume any of these are "done."
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
   and `docs/runbook.md` for the details.
 - AWS write access doesn't exist yet (`kiro-s3-readonly` is read-only) —
-  the S3 upload in `pre-commit`/`pre-push` and the PR-gate Lambda both
-  need a separate, not-yet-created write-capable role.
-- `company-policy.md` still references the old `atlassian`/`sonarqube`
-  MCP server names — stale against the current `atlassian-rovo`/`aws`
-  entries in `mcp.json`. Cosmetic, but worth reconciling.
+  the S3 upload in `pre-push` and the PR-gate Lambda both need a
+  separate, not-yet-created write-capable role. (`pre-commit`'s S3 line
+  was removed entirely 2026-08-25 — see the "tracking source of truth
+  moved" entry above; no longer applicable there.)
+- [x] **Fixed 2026-08-25**, as part of the `aidlc-` naming cleanup below:
+  the old `company-policy.md` (now `.kiro/steering/aidlc-git-
+  conventions.md`) referenced the old `atlassian`/`sonarqube` MCP server
+  names — stale against the current `atlassian-rovo`/`aws` entries in
+  `mcp.json`. Reconciled while consolidating the file, not a separate
+  step.

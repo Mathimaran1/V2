@@ -14,7 +14,7 @@ file is the only thing that changes to switch to CodeCommit later.
 
 ## Build order
 
-1. **Steering** — `.kiro/steering/company-policy.md` (already in place)
+1. **Steering** — `.kiro/steering/aidlc-git-conventions.md` (already in place)
 2. **MCP → Jira/SonarQube** — `.kiro/settings/mcp.json` (fill in real hosts/tokens)
 3. **Specs** — plan each ticket in Kiro before coding
 4. **Hooks** — `.kiro/hooks/`, `.githooks/` (already in place, see setup below)
@@ -57,9 +57,10 @@ one word to fill in rather than something to remember (see `.gitmessage`).
 
 ```
 .kiro/
-  steering/company-policy.md   # rules Kiro always follows
+  steering/aidlc-git-conventions.md   # rules Kiro always follows
   settings/mcp.json            # Jira + SonarQube MCP connections
-  hooks/ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket (once per branch), and detect mid-session switches
+  hooks/aidlc-ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket (once per branch), and detect mid-session switches
+  hooks/aidlc-bootstrap-git-hooks.json        # Kiro-side hook: set up .githooks/ + core.hooksPath automatically on session start if missing
   current-ticket.json          # local, gitignored — current ticket + starting credits
 .githooks/
   post-checkout                # clears current-ticket.json on new branch
