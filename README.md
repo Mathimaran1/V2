@@ -15,7 +15,9 @@ file is the only thing that changes to switch to CodeCommit later.
 ## Build order
 
 1. **Steering** — `.kiro/steering/aidlc-git-conventions.md` (already in place)
-2. **MCP → Jira/SonarQube** — `.kiro/settings/mcp.json` (fill in real hosts/tokens)
+2. **MCP → Jira** — `.kiro/settings/mcp.json` (fill in real hosts/tokens). SonarQube
+   is not an MCP connection — it's called directly via `sonar-scanner` in
+   `.githooks/pre-push` (currently disabled with a warning; see below).
 3. **Specs** — plan each ticket in Kiro before coding
 4. **Hooks** — `.kiro/hooks/`, `.githooks/` (already in place, see setup below)
 5. **Powers** — check Kiro's Powers catalog before hand-rolling more MCP config
@@ -40,9 +42,9 @@ one word to fill in rather than something to remember (see `.gitmessage`).
 
 ## What still needs to be filled in before this is live
 
-- `.kiro/settings/mcp.json` — real SonarQube host URL
 - `.githooks/pre-commit` / `pre-push` — real S3 bucket name (`your-tracking-bucket`)
-- `.githooks/pre-push` — real SonarQube project key + host
+- `.githooks/pre-push` — real SonarQube project key + host (this is where SonarQube
+  setup actually happens — not `mcp.json`, SonarQube isn't MCP-integrated)
 - AWS side (not yet scaffolded here): PR-gate Lambda, daily/weekly health
   checks, Jira/SonarQube webhook receivers, EventBridge rule for
   CodePipeline, the DuckDB-over-S3 dashboard Lambda — see `docs/runbook.md`
@@ -58,7 +60,7 @@ one word to fill in rather than something to remember (see `.gitmessage`).
 ```
 .kiro/
   steering/aidlc-git-conventions.md   # rules Kiro always follows
-  settings/mcp.json            # Jira + SonarQube MCP connections
+  settings/mcp.json            # Jira MCP connection (SonarQube isn't MCP — see .githooks/pre-push)
   hooks/aidlc-ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket (once per branch), and detect mid-session switches
   hooks/aidlc-bootstrap-git-hooks.json        # Kiro-side hook: set up .githooks/ + core.hooksPath automatically on session start if missing
   current-ticket.json          # local, gitignored — current ticket + starting credits

@@ -4,8 +4,8 @@ inclusion: always
 # AI DLC Git Conventions — Kiro Usage Rules
 
 ## Ticket linking
-- Every plan must mention its Jira ticket ID (e.g. PROJ-123).
-- Every commit message must start with "PROJ-123: short description".
+- Every plan must mention its Jira ticket ID (e.g. ANG-123).
+- Every commit message must start with "ANG-123: short description".
 
 ## Commit message trailer format
 Every commit gets six machine-readable trailers, stamped automatically
