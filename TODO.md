@@ -303,19 +303,110 @@ been made yet. Not bugs — just don't assume any of these are "done."
 ## Design gap: mid-session ticket switch, no branch change, goes undetected
 - [x] **Fixed and tested 2026-08-25 — see the episode_id entry above,
       this is the same fix, not a separate one.** `ask-for-ticket-if-
-      missing`'s CASE B now checks, even when the ticket file is
-      non-empty, whether the current message clearly indicates work on a
-      different specific ticket — using a `pending_switch_to` field in
-      `current-ticket.json` as the two-step state signal (file-emptiness
-      can't be the signal here, since the file stays non-empty the whole
-      time). Confirmed switch: new ticket, fresh baseline, fresh
-      episode_id, old one abandoned. Declined/ambiguous: defaults to NOT
-      switching (safe default — an accidental switch on an ambiguous
-      reply would misattribute credits just as badly as never asking).
-      Both paths simulated end-to-end through real commits. Still open:
-      whether Kiro's agent actually *recognizes* a mid-session switch
-      from natural conversation wasn't verified here (only the file-state
+      missing`'s CASE C (renamed from CASE B on 2026-08-26 — see below)
+      checks, even when the ticket file is non-empty, whether the
+      current message clearly indicates work on a different specific
+      ticket — using a `pending_switch_to` field in `current-ticket.json`
+      as the two-step state signal (file-emptiness can't be the signal
+      here, since the file stays non-empty the whole time). Confirmed
+      switch: new ticket, fresh baseline, fresh episode_id, old one
+      abandoned. Declined/ambiguous: defaults to NOT switching (safe
+      default — an accidental switch on an ambiguous reply would
+      misattribute credits just as badly as never asking). Both paths
+      simulated end-to-end through real commits. Still open: whether
+      Kiro's agent actually *recognizes* a mid-session switch from
+      natural conversation wasn't verified here (only the file-state
       mechanics were) — needs a real run through Kiro before full trust.
+      **Superseded as the primary mechanism 2026-08-26** — see the CASE
+      B/C restructure below; this AI-detection path is now the secondary
+      safety net, not the main one.
+
+## Restructure: mid-session switch is now THREE cases, not two (2026-08-26)
+- [x] **Built and tested for real.** The old single "CASE B" (AI-based,
+      mid-conversation detection in `ask-for-ticket-if-missing.json`) is
+      renamed to **CASE C** — kept exactly as-is otherwise, still the
+      softer secondary safety net for catching a switch before anything's
+      committed. A genuinely new **CASE B** was added: a deterministic,
+      non-AI check in a new `.githooks/post-commit` hook that runs right
+      after every successful commit, asks directly in the terminal
+      ("Working on a different ticket now? (y/n)"), and on yes: asks for
+      the new ticket ID, generates a fresh `episode_id` (same
+      `'ep_'+hex(time)+token_hex(3)` scheme as CASE A/C, so all three
+      cases produce indistinguishable-looking IDs), reads the current
+      credit total as the new baseline, and overwrites
+      `current-ticket.json`. This is now the **primary** mechanism —
+      reliable and deterministic, not a best-effort AI read of
+      conversation — CASE C stays as backup only.
+      **Tested for real, human-typed path** (via a real allocated pty,
+      not a guess — a bare non-interactive shell can't stand in for an
+      actual terminal here): answered "n" twice across two commits →
+      `current-ticket.json` byte-identical both times, both commits'
+      `Kiro-Episode` trailers matched. Answered "y" + a new ticket ID →
+      genuinely new `episode_id` generated, file updated correctly, and
+      confirmed the commit **already in flight when the switch was
+      confirmed** still carried the old ticket/episode (switch fires
+      post-commit, so it can only affect the *next* commit) while the
+      following commit correctly carried the new ticket/episode.
+      **Found a real gap while testing the agent-initiated-commit path**
+      (Kiro's agent, or any AI coding agent, running `git commit` itself
+      as a subprocess — simulated here via a raw non-interactive shell
+      exec, no pty, no piped stdin, matching how an agent's tool-call
+      subprocess actually looks): the first cut of `post-commit` used a
+      plain `read -p ... < /dev/tty`. Result, confirmed directly (with a
+      `timeout` wrapper as a safety net, not needed in practice): it did
+      **not hang** — `/dev/tty` failed immediately with `No such device
+      or address` (ENXIO, no controlling terminal at all in that
+      context), so the commit completed in well under a second. But
+      nothing durable recorded that the switch-check never ran — only a
+      raw bash error line buried mid-console, easy to miss, and no
+      `hook-health.log` entry. That's a real "fails silently" gap in
+      practice, not a hang.
+      **Fix, built and re-tested:** guard the interactive read behind an
+      actual TTY-availability check, and log explicitly to
+      `hook-health.log` when it's skipped. Deliberately **not**
+      `[ -t 0 ]` — tested directly and confirmed it's the wrong signal
+      here: even the genuine human-typed-commit path (real pty) showed
+      `[ -t 0 ]` as **false** for this hook's stdin (same root cause
+      `pre-commit` already hit — see its 2026-08-25 fix entry — git does
+      not guarantee a hook's stdin reflects the real terminal). The
+      signal that was actually true for the human path and actually
+      false for the no-terminal-at-all agent path was whether `/dev/tty`
+      itself is openable (`{ : < /dev/tty; } 2>/dev/null`). Re-tested
+      after the fix: agent-initiated commit now completes cleanly with no
+      stray bash error, `current-ticket.json` untouched, and a
+      `hook_status=post-commit-switch-check-skipped-no-tty` line lands in
+      `hook-health.log` with a timestamp and the commit SHA. Re-ran both
+      human-typed regression cases ("n" and "y") after the fix too — both
+      still work identically to before.
+      **Known remaining limit, not fully closed:** this was tested by
+      having Claude Code itself (this session's own agent) run `git
+      commit` as a bare subprocess with no terminal attached — a
+      reasonable proxy for "an AI agent's subprocess has no controlling
+      terminal," and the underlying Unix behavior (`/dev/tty` → ENXIO
+      with no controlling terminal) isn't agent-specific. But it was not
+      run through Kiro's actual application process — still worth a real
+      pass through Kiro itself before fully trusting this in practice,
+      same caveat as CASE C above.
+
+## Found while testing episode_id end-to-end (2026-08-26) — `git rebase` also clears `current-ticket.json`
+- [ ] **Confirmed by direct testing, not yet fixed.** `post-checkout`
+      clears `current-ticket.json` whenever `$3 = "1"` — documented as
+      "branch switch," but that flag actually means "this checkout moved
+      to a different commit via a branch-level ref," which `git rebase`
+      also triggers internally (it checks out the base commit, replays
+      commits, then reattaches the branch). Reproduced twice on a real
+      branch: `current-ticket.json` went from a populated baseline to
+      `{}` immediately after `git rebase`, with no branch switch and no
+      ticket change involved at all. Practical effect: the *next* commit
+      after any rebase gets routed through CASE A (empty ticket_id) and
+      is issued a brand-new `episode_id`, silently fragmenting what
+      should be one continuous episode into two. Not the same issue as
+      the "amend/rebase creates extra stale tracking files" gap above —
+      that one's about duplicate `.kiro-tracking/*.json` records; this
+      one's about the episode boundary itself moving when it shouldn't.
+      **Not fixed yet** — likely needs `post-checkout` to also check that
+      `$1 != $2` (the ref actually changed) and/or that HEAD landed on a
+      branch (not detached), rather than trusting `$3=1` alone.
 
 ## Found while fixing the branch mix-up above (2026-08-25)
 - **`git cherry-pick` did not invoke `pre-commit` or `commit-msg` here,**

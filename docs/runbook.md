@@ -19,7 +19,7 @@ actually works, each stage depending on the one before it:
    bolt-on step.
 4. **Hooks (auto-update Jira + auto-lint)** — only now add the
    automation: `aidlc-ask-for-ticket-if-missing`, `aidlc-bootstrap-git-hooks`,
-   `post-checkout`, `pre-commit`, `commit-msg` (all in section 1 below).
+   `post-checkout`, `pre-commit`, `post-commit`, `commit-msg` (all in section 1 below).
 5. **Powers** — before building any custom SonarQube or Jira
    integration by hand, check Kiro's Powers catalog first. If a
    Jira or SonarQube power already exists, install it instead of
@@ -116,24 +116,44 @@ entries.)
 - Gets filled in when the dev answers Kiro's question "which ticket?"
 - Gets emptied automatically when the dev switches to a new branch.
 - Briefly holds a fourth field, `pending_switch_to`, while a mid-session
-  switch question is awaiting an answer (see the hook below, CASE B) —
+  switch question is awaiting an answer (see the hook below, CASE C) —
   not part of the steady-state schema, gone again as soon as that
   exchange resolves either way.
 
+### Three cases can start a new episode — as of 2026-08-26
+There are now three triggers that generate a fresh `episode_id` and
+baseline, not two — **CASE B was added and the old CASE B was renamed to
+CASE C** (see `TODO.md`'s 2026-08-26 restructure entry for the full
+test record):
+- **CASE A** (below, in `ask-for-ticket-if-missing.json`) — branch
+  switch: `post-checkout` clears the file, the next ask-ticket prompt
+  regenerates it.
+- **CASE B** (`.githooks/post-commit`, documented further down) — a
+  direct, deterministic "working on a different ticket now? (y/n)"
+  question after every commit. **This is the primary mechanism now,**
+  not CASE C — it doesn't depend on an AI correctly reading intent from
+  conversation.
+- **CASE C** (below, in `ask-for-ticket-if-missing.json`) — the
+  AI-based mid-conversation detection that used to be the only
+  mid-session mechanism. Kept as a secondary, best-effort safety net for
+  catching a switch *before* anything's been committed — softer by
+  design, since it depends on the AI recognizing a switch from natural
+  language rather than asking directly.
+
 ### `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`
 **Who makes it:** you, one time — either through Kiro's Agent Hooks panel ("+ Create Hook"), or hand-written directly in this schema (confirmed: Kiro picks up hand-written files in `.kiro/hooks/` on its own, no UI step required, as long as the shape below is matched exactly).
-**What it does:** two jobs in one hook, since both need to fire on every prompt. (1) Asks for the ticket ID when nothing is saved yet (CASE A below). (2) Notices when a dev is planning/working on a *different* ticket than the one saved, without having switched branches — `post-checkout` only clears the file on an actual branch switch, so without this, that scenario silently misattributes credits (CASE B below). Both cases end in a fresh `credits_at_ticket_start` baseline and `episode_id` — a branch switch and a mid-session switch are the two things that should ever start a new episode; this hook is what makes the second one actually happen instead of just being a documented gap (see `TODO.md`).
+**What it does:** two of the three episode-starting cases, since both need to fire on every prompt. (1) Asks for the ticket ID when nothing is saved yet (CASE A below). (2) Notices when a dev is planning/working on a *different* ticket than the one saved, without having switched branches or answered CASE B's post-commit question yet — this is the softer, secondary safety net (CASE C below), not the primary mid-session-switch mechanism (that's CASE B, in `.githooks/post-commit` — see further down). Both cases in this file end in a fresh `credits_at_ticket_start` baseline and `episode_id`.
 **Note:** this is Kiro's actual hook schema, confirmed by inspecting what the Agent Hooks UI itself writes to disk — an earlier draft of this file used a made-up shape (`when`/`then`/`promptSubmitted`/`agentAction`) that Kiro silently ignored. If you're adding more hooks later, match this shape, not that one.
 ```json
 {
   "version": "v1",
   "hooks": [
     {
-      "name": "Ask for ticket if missing",
+      "name": "Ask for ticket if missing (CASE A + CASE C)",
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "agent",
-        "prompt": "First check .kiro/current-ticket.json. There are two top-level cases.\n\nCASE A — ticket_id is empty or missing: this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) — so branch on the current message: (A1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question — read the current credit total AND generate a fresh episode_id by running exactly this command (do not improvise another method — the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` — this prints two lines: line 1 is the credit total, line 2 is the new episode_id. Use both verbatim, do not read either off of any other command's raw/truncated output and do not generate the episode_id yourself some other way. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into .kiro/current-ticket.json (this fully replaces the file's contents — there is no pending_switch_to to worry about here since the file was empty), briefly confirm it's saved, then continue handling the rest of their request normally — do not ask again. (A2) Otherwise, the message is a normal work request, not an answer to a prior question — stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per (A1).\n\nCASE B — ticket_id is non-empty: this is the mid-session ticket-switch case (no branch change has happened, so post-checkout never cleared the file) — also a two-step flow, using a pending_switch_to field in current-ticket.json as the state signal instead of file-emptiness, since the file stays non-empty throughout this whole exchange: (B1) if current-ticket.json ALSO already has a non-empty pending_switch_to field, a switch question was asked on the previous turn — treat the CURRENT message as the answer to it, not as a new request yet. If the message is a clear affirmative (e.g. 'yes', 'switch', 'confirm', or it repeats the pending_switch_to ticket ID), the switch is confirmed: generate a fresh baseline and episode_id for the NEW ticket by running exactly this command: `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` — same two-line output as in (A1). Then write {\"ticket_id\": <pending_switch_to's value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into current-ticket.json — this REPLACES the old ticket_id, baseline, and episode_id entirely, and drops the pending_switch_to field (do not carry it over). Briefly confirm the switch happened, then continue with the rest of their request normally. If the message is NOT a clear affirmative (declines, is ambiguous, or is unrelated to the question), default to NOT switching — this is the safe default, since silently switching on an ambiguous reply risks misattributing credits just as badly as never asking at all. Remove only the pending_switch_to field, leave ticket_id, credits_at_ticket_start, and episode_id exactly as they were, briefly note you're staying on the current ticket, then continue with their original request normally. (B2) Otherwise (no pending_switch_to set), check whether the user's CURRENT message clearly indicates they are now working on or actively planning a SPECIFIC different Jira ticket than the one saved — i.e. it mentions another ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ in a context suggesting real work or planning on it (not a passing reference, a comparison to past work, or an example). If so, do NOT proceed with their request yet — ask to confirm: \"You're currently tracked on <the saved ticket_id> — are you switching to <the mentioned ticket ID>?\", and write pending_switch_to set to that mentioned ticket ID into current-ticket.json, merged in alongside the existing ticket_id/credits_at_ticket_start/episode_id (do not touch those three fields yet), then wait for their next message to be treated as the answer per (B1). If no different ticket is clearly indicated, do nothing extra and proceed with the request normally, exactly as before this whole mid-session-switch logic existed."
+        "prompt": "First check .kiro/current-ticket.json. This hook handles two of the three cases that can start a new episode \u2014 CASE A and CASE C. (CASE B \u2014 a direct, deterministic post-commit question, the primary switch-detection mechanism \u2014 lives entirely in .githooks/post-commit, not in this AI-driven hook. CASE C below is the softer secondary safety net that can catch a switch mid-conversation, before anything has even been committed yet.)\n\nCASE A \u2014 ticket_id is empty or missing: this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) \u2014 so branch on the current message: (A1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question \u2014 read the current credit total AND generate a fresh episode_id by running exactly this command (do not improvise another method \u2014 the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 this prints two lines: line 1 is the credit total, line 2 is the new episode_id. Use both verbatim, do not read either off of any other command's raw/truncated output and do not generate the episode_id yourself some other way. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into .kiro/current-ticket.json (this fully replaces the file's contents \u2014 there is no pending_switch_to to worry about here since the file was empty), briefly confirm it's saved, then continue handling the rest of their request normally \u2014 do not ask again. (A2) Otherwise, the message is a normal work request, not an answer to a prior question \u2014 stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per (A1).\n\nCASE C \u2014 ticket_id is non-empty: this is the mid-session ticket-switch case (no branch change has happened, so post-checkout never cleared the file) \u2014 also a two-step flow, using a pending_switch_to field in current-ticket.json as the state signal instead of file-emptiness, since the file stays non-empty throughout this whole exchange: (C1) if current-ticket.json ALSO already has a non-empty pending_switch_to field, a switch question was asked on the previous turn \u2014 treat the CURRENT message as the answer to it, not as a new request yet. If the message is a clear affirmative (e.g. 'yes', 'switch', 'confirm', or it repeats the pending_switch_to ticket ID), the switch is confirmed: generate a fresh baseline and episode_id for the NEW ticket by running exactly this command: `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 same two-line output as in (A1). Then write {\"ticket_id\": <pending_switch_to's value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into current-ticket.json \u2014 this REPLACES the old ticket_id, baseline, and episode_id entirely, and drops the pending_switch_to field (do not carry it over). Briefly confirm the switch happened, then continue with the rest of their request normally. If the message is NOT a clear affirmative (declines, is ambiguous, or is unrelated to the question), default to NOT switching \u2014 this is the safe default, since silently switching on an ambiguous reply risks misattributing credits just as badly as never asking at all. Remove only the pending_switch_to field, leave ticket_id, credits_at_ticket_start, and episode_id exactly as they were, briefly note you're staying on the current ticket, then continue with their original request normally. (C2) Otherwise (no pending_switch_to set), check whether the user's CURRENT message clearly indicates they are now working on or actively planning a SPECIFIC different Jira ticket than the one saved \u2014 i.e. it mentions another ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ in a context suggesting real work or planning on it (not a passing reference, a comparison to past work, or an example). If so, do NOT proceed with their request yet \u2014 ask to confirm: \"You're currently tracked on <the saved ticket_id> \u2014 are you switching to <the mentioned ticket ID>?\", and write pending_switch_to set to that mentioned ticket ID into current-ticket.json, merged in alongside the existing ticket_id/credits_at_ticket_start/episode_id (do not touch those three fields yet), then wait for their next message to be treated as the answer per (C1). If no different ticket is clearly indicated, do nothing extra and proceed with the request normally, exactly as before this whole mid-session-switch logic existed."
       },
       "enabled": true
     }
@@ -146,7 +166,7 @@ entries.)
 
 ### `.kiro/hooks/aidlc-bootstrap-git-hooks.json`
 **Who makes it:** you, one time — same as the ask-for-ticket hook above (hand-written, same schema, picked up by Kiro automatically).
-**What it does:** checks whether this repo's git hooks are actually live on *this* machine — both `.githooks/pre-commit` existing AND `git config core.hooksPath` already equal to `.githooks` have to be true, since the files can exist while a fresh clone still hasn't pointed git at them. If either is missing, it recreates all four `.githooks/` scripts (`pre-commit`, `post-checkout`, `commit-msg`, `pre-push`) from what's already committed elsewhere in the repo's history rather than rewriting them from scratch — the real scripts carry fixes for bugs found by testing (see `TODO.md`) that a reinvented version would silently reintroduce — then `chmod +x`s them and runs `git config core.hooksPath .githooks`. This is what makes "clone the repo, hooks just work" true instead of relying on every dev remembering the one-time step by hand.
+**What it does:** checks whether this repo's git hooks are actually live on *this* machine — both `.githooks/pre-commit` existing AND `git config core.hooksPath` already equal to `.githooks` have to be true, since the files can exist while a fresh clone still hasn't pointed git at them. If either is missing, it recreates all five `.githooks/` scripts (`pre-commit`, `post-checkout`, `post-commit`, `commit-msg`, `pre-push`) from what's already committed elsewhere in the repo's history rather than rewriting them from scratch — the real scripts carry fixes for bugs found by testing (see `TODO.md`) that a reinvented version would silently reintroduce — then `chmod +x`s them and runs `git config core.hooksPath .githooks`. This is what makes "clone the repo, hooks just work" true instead of relying on every dev remembering the one-time step by hand. (`post-commit` added to this list 2026-08-26 alongside the CASE B hook itself — a bootstrap that recreated the other four but not this one would silently leave CASE B missing on every freshly-set-up machine.)
 
 **Trigger is `PostFileSave`, not `sessionStarted` — changed 2026-08-25.** The original version used `sessionStarted`, on the assumption that "runs once when a session begins" was the natural fit for a one-time bootstrap check. Testing disproved that (see `TODO.md`): Kiro's Agent Hooks panel doesn't even list `aidlc-bootstrap-git-hooks.json` when `sessionStarted` is its trigger, and an end-to-end test (fresh session, hooks deliberately torn down first) confirmed it never fires at all. Using the panel's own "+ Create Hook" button defaulted to `PostFileSave`, which suggested that trigger is one Kiro's UI actually offers — so this hook was switched to it as the next thing to try. **This has not yet been confirmed end-to-end working** (unlike the `sessionStarted` failure, which was directly tested) — treat it as the current best guess, not a verified fix, until someone actually watches it fire.
 ```json
@@ -158,7 +178,7 @@ entries.)
       "trigger": "PostFileSave",
       "action": {
         "type": "agent",
-        "prompt": "Check whether this repo's git hooks are actually set up: does .githooks/pre-commit exist, AND does `git config core.hooksPath` already equal '.githooks'? Both must be true — if either is missing, the hooks aren't live even if the files exist. If both are already true, do nothing and proceed normally. If either is missing: (1) create the .githooks/ folder if it doesn't exist; (2) write .githooks/pre-commit, .githooks/post-checkout, .githooks/commit-msg, AND .githooks/pre-push with their real, current content — read it from what's already committed in this repo's git history if these files exist elsewhere (e.g. a prior commit, or docs/runbook.md's copies of them), do not invent new content or improvise a simplified version, since the real scripts contain fixes for several bugs found by testing (see TODO.md) that a rewritten-from-scratch version would silently reintroduce; recreate all four, not just the first three — a dev missing pre-push has no SonarQube gate hook at all, which is worse than having it present but disabled; (3) run `chmod +x .githooks/*`; (4) run `git config core.hooksPath .githooks`; (5) tell the user what was set up and why (first clone / hooks weren't configured on this machine yet). See .kiro/steering/aidlc-git-conventions.md for the conventions these hooks enforce.\""
+        "prompt": "Check whether this repo's git hooks are actually set up: does .githooks/pre-commit exist, AND does `git config core.hooksPath` already equal '.githooks'? Both must be true — if either is missing, the hooks aren't live even if the files exist. If both are already true, do nothing and proceed normally. If either is missing: (1) create the .githooks/ folder if it doesn't exist; (2) write .githooks/pre-commit, .githooks/post-checkout, .githooks/post-commit, .githooks/commit-msg, AND .githooks/pre-push with their real, current content — read it from what's already committed in this repo's git history if these files exist elsewhere (e.g. a prior commit, or docs/runbook.md's copies of them), do not invent new content or improvise a simplified version, since the real scripts contain fixes for several bugs found by testing (see TODO.md) that a rewritten-from-scratch version would silently reintroduce; recreate all five, not just a subset — a dev missing post-commit silently loses CASE B (the primary mid-session ticket-switch detector, added 2026-08-26 — see TODO.md), and a dev missing pre-push has no SonarQube gate hook at all, either of which is worse than having it present but disabled; (3) run `chmod +x .githooks/*`; (4) run `git config core.hooksPath .githooks`; (5) tell the user what was set up and why (first clone / hooks weren't configured on this machine yet). See .kiro/steering/aidlc-git-conventions.md for the conventions these hooks enforce.\""
       },
       "enabled": true
     }
@@ -443,6 +463,101 @@ echo "Kiro-Confidence: $CONFIDENCE" >> "$1"
 echo "Kiro-Session: $SESSION_ID" >> "$1"
 echo "Kiro-Source: $SOURCE" >> "$1"
 ```
+
+### `.githooks/post-commit`
+**Who makes it:** you, one time. Added 2026-08-26 — see `TODO.md`'s
+2026-08-26 restructure entry for the full test record, including the
+agent-initiated-commit gap this hook's TTY guard was written to close.
+**What it does:** CASE B, the primary mid-session ticket-switch
+detector. Runs right after every successful commit and asks directly —
+deterministic, not an AI guess at intent. "n" (or default/empty)
+leaves everything untouched; "y" asks for the new ticket, generates a
+fresh `episode_id` (same scheme as CASE A/C), reads the current credit
+total as the new baseline, and overwrites `current-ticket.json`. Since
+this runs *after* the commit, the switch only affects the *next*
+commit — the one that triggered the question still carries the old
+ticket/episode, confirmed by testing.
+```bash
+#!/bin/bash
+# CASE B: deterministic, non-AI mid-session ticket-switch check. Runs
+# right after every successful commit — this is the PRIMARY, reliable
+# switch-detection mechanism (CASE C in the ask-ticket hook, AI-based
+# and mid-conversation, is the softer secondary safety net for catching
+# a switch before anything has been committed yet).
+#
+# Same episode_id generation scheme as CASE A/C, so every episode_id
+# looks the same regardless of which case created it: 'ep_' + hex
+# unix-timestamp + 3 random hex bytes.
+
+# TTY availability check: NOT `[ -t 0 ]`. Confirmed by testing (see
+# TODO.md) that stdin is not a reliable signal here either way — a real
+# human-typed `git commit` in an actual interactive terminal STILL shows
+# `[ -t 0 ]` as false for this hook's stdin (same root cause pre-commit
+# already hit and worked around). The only signal that was actually true
+# for the human case and actually false for a script/agent running
+# `git commit` as a subprocess with no controlling terminal at all is
+# whether /dev/tty itself is openable — it fails outright (ENXIO) when
+# there's no controlling terminal, which is exactly the no-TTY case this
+# guards against.
+if { : < /dev/tty; } 2>/dev/null; then
+  HAS_TTY=1
+else
+  HAS_TTY=0
+  mkdir -p .kiro-tracking
+  echo "hook_status=post-commit-switch-check-skipped-no-tty ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse HEAD)" >> .kiro-tracking/hook-health.log
+fi
+
+if [ "$HAS_TTY" = "1" ]; then
+  read -p "Working on a different ticket now? (y/n) " SWITCH_ANSWER < /dev/tty
+fi
+
+if [ "$HAS_TTY" = "1" ] && { [ "$SWITCH_ANSWER" = "y" ] || [ "$SWITCH_ANSWER" = "Y" ]; }; then
+  read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty
+  if [ -n "$NEW_TICKET" ]; then
+    RESULT=$(python3 -c "
+import sqlite3, json, os, time, secrets
+con = sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb'))
+row = con.execute(\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\").fetchone()
+val = row[0]
+val = val.decode('utf-8') if isinstance(val, bytes) else val
+usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
+print(usage)
+print('ep_' + format(int(time.time()), 'x') + secrets.token_hex(3))
+" 2>/dev/null)
+    CREDITS_NOW=$(echo "$RESULT" | sed -n '1p')
+    NEW_EPISODE=$(echo "$RESULT" | sed -n '2p')
+    if [ -n "$CREDITS_NOW" ] && [ -n "$NEW_EPISODE" ]; then
+      echo "{\"ticket_id\": \"$NEW_TICKET\", \"credits_at_ticket_start\": $CREDITS_NOW, \"episode_id\": \"$NEW_EPISODE\"}" > .kiro/current-ticket.json
+      echo "✅ Switched to $NEW_TICKET — new episode $NEW_EPISODE, baseline $CREDITS_NOW credits." >&2
+    else
+      echo "⚠️  Could not read the current credit baseline — NOT switching, current-ticket.json left untouched." >&2
+    fi
+  else
+    echo "No ticket entered — staying on the current ticket." >&2
+  fi
+fi
+# "n", empty/default answer, or anything else: do nothing at all —
+# current-ticket.json untouched, same episode continues.
+```
+**No-TTY fallback, spelled out:** when `/dev/tty` can't be opened at
+all (no controlling terminal — the confirmed case for an AI agent
+running `git commit` as a subprocess, Kiro's own or otherwise), the
+question is skipped rather than risking a hang on a `read` that will
+never receive input, or a wrong "no TTY" false-positive from checking
+`[ -t 0 ]` instead (that check was tested directly and found to read
+false even for a genuine human-typed commit — see `TODO.md`). The skip
+is logged to `.kiro-tracking/hook-health.log` with a timestamp and the
+commit SHA so it's a visible, auditable gap, not an invisible one.
+Practical consequence: **a commit made entirely by an AI agent never
+gets asked about a ticket switch at the terminal-hook level.** This is
+mitigated as of 2026-08-26, but at the *chat* level, not the hook
+level: `.kiro/steering/aidlc-git-conventions.md` now instructs the
+agent to ask the same switch question directly in the conversation,
+immediately after any commit it makes itself — see that file's "CASE B,
+agent-initiated-commit counterpart" section. That's a behavioral rule,
+not code, so it can in principle be missed; this log entry is exactly
+the backup for when it is. See `TODO.md`'s entry for this fix for the
+real tested transcript.
 
 ### One-time step every dev has to do
 ```bash

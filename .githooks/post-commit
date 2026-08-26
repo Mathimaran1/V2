@@ -1,0 +1,60 @@
+#!/bin/bash
+# CASE B: deterministic, non-AI mid-session ticket-switch check. Runs
+# right after every successful commit — this is the PRIMARY, reliable
+# switch-detection mechanism (CASE C in the ask-ticket hook, AI-based
+# and mid-conversation, is the softer secondary safety net for catching
+# a switch before anything has been committed yet).
+#
+# Same episode_id generation scheme as CASE A/C, so every episode_id
+# looks the same regardless of which case created it: 'ep_' + hex
+# unix-timestamp + 3 random hex bytes.
+
+# TTY availability check: NOT `[ -t 0 ]`. Confirmed by testing (see
+# TODO.md) that stdin is not a reliable signal here either way — a real
+# human-typed `git commit` in an actual interactive terminal STILL shows
+# `[ -t 0 ]` as false for this hook's stdin (same root cause pre-commit
+# already hit and worked around). The only signal that was actually true
+# for the human case and actually false for a script/agent running
+# `git commit` as a subprocess with no controlling terminal at all is
+# whether /dev/tty itself is openable — it fails outright (ENXIO) when
+# there's no controlling terminal, which is exactly the no-TTY case this
+# guards against.
+if { : < /dev/tty; } 2>/dev/null; then
+  HAS_TTY=1
+else
+  HAS_TTY=0
+  mkdir -p .kiro-tracking
+  echo "hook_status=post-commit-switch-check-skipped-no-tty ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse HEAD)" >> .kiro-tracking/hook-health.log
+fi
+
+if [ "$HAS_TTY" = "1" ]; then
+  read -p "Working on a different ticket now? (y/n) " SWITCH_ANSWER < /dev/tty
+fi
+
+if [ "$HAS_TTY" = "1" ] && { [ "$SWITCH_ANSWER" = "y" ] || [ "$SWITCH_ANSWER" = "Y" ]; }; then
+  read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty
+  if [ -n "$NEW_TICKET" ]; then
+    RESULT=$(python3 -c "
+import sqlite3, json, os, time, secrets
+con = sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb'))
+row = con.execute(\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\").fetchone()
+val = row[0]
+val = val.decode('utf-8') if isinstance(val, bytes) else val
+usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
+print(usage)
+print('ep_' + format(int(time.time()), 'x') + secrets.token_hex(3))
+" 2>/dev/null)
+    CREDITS_NOW=$(echo "$RESULT" | sed -n '1p')
+    NEW_EPISODE=$(echo "$RESULT" | sed -n '2p')
+    if [ -n "$CREDITS_NOW" ] && [ -n "$NEW_EPISODE" ]; then
+      echo "{\"ticket_id\": \"$NEW_TICKET\", \"credits_at_ticket_start\": $CREDITS_NOW, \"episode_id\": \"$NEW_EPISODE\"}" > .kiro/current-ticket.json
+      echo "✅ Switched to $NEW_TICKET — new episode $NEW_EPISODE, baseline $CREDITS_NOW credits." >&2
+    else
+      echo "⚠️  Could not read the current credit baseline — NOT switching, current-ticket.json left untouched." >&2
+    fi
+  else
+    echo "No ticket entered — staying on the current ticket." >&2
+  fi
+fi
+# "n", empty/default answer, or anything else: do nothing at all —
+# current-ticket.json untouched, same episode continues.
