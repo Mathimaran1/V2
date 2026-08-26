@@ -823,6 +823,43 @@ a future person (or a future me).
       `pre-commit`/`post-commit` entirely, same structural limit as
       every other pre-commit-based check in this repo — this closes the
       "silently accepted" gap, not the "hooks can be skipped" one.
+      **`cloudId` fix confirmed via live retest 2026-08-26 — not just
+      "instruction written, unverified" anymore.** Ran the same live
+      test again with a different fake ticket (`ANG-888888`), to see
+      the guess-vs-lookup behavior directly rather than trust the fix
+      on its own wording. Real transcript: the *first and only* tool
+      call was `getAccessibleAtlassianResources`, which correctly
+      returned `teamlease-tech.atlassian.net`; Kiro went straight to
+      `searchJiraIssuesUsingJql` with that real `cloudId` — no wrong
+      guess, no self-correction needed this time, unlike the
+      `ANG-999999` run that surfaced the bug in the first place. Both
+      runs are now on record: one showing the bug (guessed
+      `animedisciples.atlassian.net`, self-corrected), one showing the
+      fix (looked it up correctly the first time). This closes out the
+      Jira ticket-existence validation feature completely — all three
+      entry points tested, the `cloudId` bug found, fixed, and
+      re-verified, not left as "should be fixed" on the strength of the
+      instruction's wording alone.
+
+## Decided: an explicit "commit now" answers the ask-first steering rules (2026-08-26)
+- [x] **A real inconsistency, flagged directly rather than left
+      ambiguous, then settled explicitly once asked — not something
+      that was just quietly happening.** Both agent-initiated-commit
+      steering rules (the ticket-switch question in the episode-
+      boundary CASE B, and the profile-click question in the
+      ask-to-click-gate CASE B — both in `aidlc-git-conventions.md`)
+      say to ask every time before/after an agent-run commit. In
+      practice, when the user gave a direct, explicit instruction to
+      commit right now, the question sometimes got skipped and
+      sometimes didn't — a judgment call each time, never a written
+      rule either way. **Decided:** an explicit, direct commit
+      instruction ("commit this", "just commit it") counts as already
+      having answered the question — skip asking again in the same
+      breath. Anything less direct (approving a diff without saying
+      "commit," moving on to a new topic) still requires asking
+      normally. Written into both CASE B sections of
+      `aidlc-git-conventions.md` as an explicit documented exception,
+      not left as something to re-decide each time.
 
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read

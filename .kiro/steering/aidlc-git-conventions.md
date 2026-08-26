@@ -59,6 +59,17 @@ is expected to ask directly, in the conversation, in the same turn:
 > Do not skip this even if the user's original request seems finished
 > after the commit.
 
+**Documented exception, decided 2026-08-26 — not a judgment call
+anymore:** an explicit, direct instruction from the user to commit
+right now ("commit this", "just commit it") counts as having already
+answered this question for that commit — skip asking it again in the
+same breath. This was previously an inconsistent judgment call (asked
+sometimes, skipped other times, with no written rule either way) —
+flagged directly rather than left ambiguous, and settled explicitly
+once asked. Anything short of a direct commit instruction (e.g. the
+user approving a diff, or moving on to a new topic) still requires
+asking normally.
+
 **Honest limit of this mechanism:** this is a *behavioral* instruction
 to the agent, not code-level enforcement — unlike the terminal path
 above (a real hook, always runs, cannot be forgotten), this relies on
@@ -154,6 +165,12 @@ guessing from TTY presence alone.
   and actually replied in chat, but it CAN verify the agent explicitly
   claimed that happened (via the env var), which is a real, checkable
   signal — TTY presence alone was not.
+  **Same documented exception as CASE B of episode boundaries above,
+  decided 2026-08-26:** an explicit, direct instruction from the user
+  to commit right now counts as their answer — skip asking the
+  profile-click question in the same breath, and go straight to
+  `KIRO_AGENT_COMMIT=1 git commit`. Anything short of that direct an
+  instruction still requires asking first, as written above.
 
 - **CASE C — Kiro committing with no human present at all (fully
   autonomous/background execution, no active chat turn, and correctly

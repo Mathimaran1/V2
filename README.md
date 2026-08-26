@@ -195,8 +195,8 @@ all three points**, including live through a real Kiro chat session for
 the MCP path (a real query against a nonexistent ticket ID was
 correctly rejected).
 
-**Known quirk, fixed but worth watching:** on that live MCP test,
-Kiro's *first* attempt guessed a `cloudId` of
+**Known quirk, found, fixed, and re-verified.** On the first live MCP
+test, Kiro's *first* attempt guessed a `cloudId` of
 `"https://animedisciples.atlassian.net"` — an unrelated site nobody
 configured anywhere in this repo (confirmed: nothing here specifies a
 `cloudId` at all) — and only got the real one
@@ -204,10 +204,13 @@ configured anywhere in this repo (confirmed: nothing here specifies a
 `getAccessibleAtlassianResources` call on a second attempt. A guess
 that happens to self-correct once isn't something to trust in an
 unattended run with nobody watching to catch a failed self-correction,
-so the hook's instruction now requires looking up the real `cloudId`
-first, every time, rather than guessing — but that specific fix has not
-yet been re-confirmed live (would need another real Kiro run to verify
-the guess is actually gone, not just instructed against).
+so the hook's instruction was changed to require looking up the real
+`cloudId` first, every time, rather than guessing. **Re-tested live
+with a second fake ticket** to confirm the fix actually changed the
+behavior, not just the wording: this time the *first and only* tool
+call was `getAccessibleAtlassianResources`, correctly returning
+`teamlease-tech.atlassian.net`, straight into `searchJiraIssuesUsingJql`
+with the right ID — no wrong guess, no self-correction needed.
 
 ## 5. Setup instructions
 
@@ -357,7 +360,6 @@ item below was confirmed by actually testing it, not inferred.
 - DuckDB dashboard query still targeting S3 instead of commit trailers
 - `calculate-pr-credits.sh --repo/--pr`'s success path, untested against a real PR
 - Confirming the `PostFileSave` bootstrap-hook trigger actually fires end-to-end
-- Re-confirming live that the Jira-validation hook's `cloudId` fix (§4) actually stops the guess-then-self-correct pattern, not just that the instruction now forbids it
 
 **Blocked on AWS write access (no write-capable IAM role exists yet):**
 - S3 upload for tracking data (if ever reinstated — trailers are the real source of truth now)
