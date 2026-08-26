@@ -73,10 +73,20 @@ fi
 #    - credits:    ~/.config/Kiro/User/globalStorage/state.vscdb, key
 #                   "kiro.kiroAgent" (JSON) -> "kiro.resourceNotifications
 #                   .usageState".usageBreakdowns[0].currentUsage
+# Also pull usageState's own internal "timestamp" field (line 2 of this
+# command's output) — confirmed by testing (twice, reproduced — see
+# TODO.md's 2026-08-26 dashboard-resync entry) that this timestamp is
+# real evidence of when the cache was last actually refreshed: a human
+# physically clicking their profile icon in the sidebar forces a real
+# resync and moves this timestamp to "now", even when the command-based
+# equivalent (kiro.accountDashboard.showDashboard, called programmatically)
+# does not touch it at all. Used below to make credit_confidence a
+# freshness check against real evidence, not just a time-since-baseline
+# guess.
 SESSION_FILE=$(ls -t "$HOME"/.kiro/sessions/*/*/session.json 2>/dev/null | head -1)
 SESSION_ID=$(jq -r '.id // empty' "$SESSION_FILE" 2>/dev/null)
 
-CREDITS_NOW=$(python3 -c "
+CREDITS_RESULT=$(python3 -c "
 import sqlite3, json, sys
 try:
     con = sqlite3.connect('$HOME/.config/Kiro/User/globalStorage/state.vscdb')
@@ -84,11 +94,14 @@ try:
     val = row[0]
     if isinstance(val, bytes):
         val = val.decode('utf-8')
-    usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
-    print(usage)
+    usage_state = json.loads(val)['kiro.resourceNotifications.usageState']
+    print(usage_state['usageBreakdowns'][0]['currentUsage'])
+    print(usage_state.get('timestamp', ''))
 except Exception:
     sys.exit(1)
 " 2>/dev/null)
+CREDITS_NOW=$(echo "$CREDITS_RESULT" | sed -n '1p')
+CACHE_TIMESTAMP_MS=$(echo "$CREDITS_RESULT" | sed -n '2p')
 CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
 EPISODE_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_id // empty')
 
@@ -123,6 +136,32 @@ elif [ -f .kiro/current-ticket.json ]; then
   ELAPSED=$((NOW_EPOCH - BASELINE_SET_AT))
   if [ "$ELAPSED" -lt 300 ] || [ "$CREDITS_DELTA" = "0.0000" ]; then
     CREDIT_CONFIDENCE="low"
+  fi
+
+  # 3c. Cache-freshness override: elapsed-since-baseline is a GUESS about
+  # staleness; usageState's own internal timestamp is actual EVIDENCE of
+  # when the cache was last really refreshed (see the comment above the
+  # python read). Confirmed by testing, twice reproduced (TODO.md,
+  # 2026-08-26): a dev physically clicking their profile icon in the
+  # sidebar moves this timestamp to "now" — that's a real, testable
+  # signal, even though nothing here can trigger it automatically (the
+  # command-based equivalent does NOT move it).
+  # This overrides the elapsed-since-baseline guess at both extremes:
+  #   - cache is under 2 min old  -> HIGH, regardless of how long the
+  #     ticket's been open: the dev likely just clicked their profile
+  #     and CREDITS_NOW reflects a genuinely fresh read.
+  #   - cache is over 10 min old  -> LOW, regardless of how long the
+  #     ticket's been open: nothing has refreshed the cache recently,
+  #     so a large elapsed time proves nothing about freshness.
+  # Between 2 and 10 minutes old, neither extreme applies, so the
+  # elapsed-since-baseline heuristic above stands as the fallback.
+  if [ -n "$CACHE_TIMESTAMP_MS" ]; then
+    CACHE_AGE_SECONDS=$(awk -v ts="$CACHE_TIMESTAMP_MS" -v now="$NOW_EPOCH" 'BEGIN{printf "%d", now - (ts/1000)}')
+    if [ "$CACHE_AGE_SECONDS" -lt 120 ]; then
+      CREDIT_CONFIDENCE="high"
+    elif [ "$CACHE_AGE_SECONDS" -gt 600 ]; then
+      CREDIT_CONFIDENCE="low"
+    fi
   fi
 fi
 
