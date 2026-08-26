@@ -747,6 +747,83 @@ a future person (or a future me).
       when the cache might be stale, is the accepted trade-off — not an
       oversight.
 
+## Jira ticket-existence validation, at all three points a ticket ID gets set (2026-08-26)
+- [x] **Built and tested for real at all three points — existence only,
+      not assignment (see the decision above).** A typed or resolved
+      ticket ID now gets checked against Jira before being trusted:
+      - `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json` (CASE A1 and
+        CASE C1) — via the real `atlassian-rovo` MCP connection
+        (`getJiraIssue` / `searchJiraIssuesUsingJql`). Not found → tell
+        the dev plainly, don't save, ask again. MCP failure for any
+        other reason → don't block, warn and proceed.
+      - `.githooks/pre-commit`'s branch-name AND manual-entry paths
+        (extended beyond just branch-name, since manual entry was the
+        original demonstrated gap — see "Fake/unvalidated ticket IDs"
+        below) — via a direct Jira REST API v3 call
+        (`GET /rest/api/3/issue/{key}`), since a plain git hook cannot
+        reuse Kiro's own MCP session (confirmed: the OAuth
+        tokens/client/verifier in `state.vscdb` are Electron
+        `safeStorage`-encrypted blobs — the literal `v11` version-prefix
+        bytes — gated behind gnome-keyring, not plainly readable outside
+        Kiro's own process). Uses `JIRA_BASE_URL`/`JIRA_EMAIL`/
+        `JIRA_API_TOKEN` env vars instead — not provisioned anywhere in
+        this repo, so every call currently degrades gracefully
+        (`hook_status=pre-commit-jira-validation-skipped-no-credential`)
+        until someone sets those up.
+      - `.githooks/post-commit`'s CASE B switch question — same direct
+        REST call, applied to the new ticket ID before switching.
+      **Graceful degradation, all three points:** a confirmed 404
+      (issue doesn't exist) is the only thing that rejects an ID.
+      Unreachable Jira, no credential configured, timeout, or any other
+      inconclusive signal → warn (or silently proceed for the MCP path)
+      and accept the ID anyway, logged distinctly from a confirmed
+      rejection (`...-jira-validation-unreachable` vs.
+      `...-jira-validation-failed`).
+      **Tested for real — 9 mechanical scenarios (`pre-commit` ×2 entry
+      points, `post-commit` ×1) against a local mock Jira API server**
+      (no real Jira credential exists anywhere in this environment —
+      confirmed by checking env vars, config files, and the OS keyring;
+      the mock replicates Jira's exact `200`/`404`/timeout contract, not
+      the real instance):
+      | Entry point | Valid | Fake | Unreachable |
+      |---|---|---|---|
+      | `pre-commit`, branch-name | accepted silently | rejected, falls back to manual entry | accepted, degraded gracefully, `http_code=000` logged |
+      | `pre-commit`, manual-entry | accepted silently | **commit blocked** (exit 1) | accepted, degraded gracefully, logged |
+      | `post-commit`, switch | switch succeeds, new baseline/episode | switch rejected, `current-ticket.json` byte-identical to before | switch proceeds anyway, degraded gracefully, logged |
+      **Item 1 (the AI hook) confirmed live, not just designed** — real
+      chat transcript: asked with `ANG-999999`, Kiro called
+      `searchJiraIssuesUsingJql` and `getJiraIssue` for real, correctly
+      told the dev it doesn't appear to be a real ticket, and asked
+      again rather than saving it.
+      **Real bug found during that live test, fixed before trusting
+      this further:** Kiro's first MCP attempt used
+      `cloudId: "https://animedisciples.atlassian.net"` — an unrelated,
+      unconfigured site, not something anyone set up anywhere in this
+      repo (confirmed: grepped the whole repo and `mcp.json` for
+      `cloudId` — zero matches anywhere, nothing tells the agent what
+      the real one is). It self-corrected via
+      `getAccessibleAtlassianResources` on a second attempt and got the
+      right ID (`teamlease-tech.atlassian.net`). A guess that
+      self-corrects is not something to trust in an unattended run with
+      nobody watching to catch a failed self-correction — so this isn't
+      being filed as "harmless, it worked out." **Fixed:** the hook's
+      prompt now explicitly requires calling
+      `getAccessibleAtlassianResources` first and using its returned
+      `cloudId` for every subsequent Jira MCP call in the hook, with the
+      real observed bad guess quoted directly in the instruction so a
+      future edit doesn't quietly drop the reasoning. Not re-tested
+      live after this specific fix (would need another live run through
+      Kiro to confirm the guess is actually gone, not just
+      instructed against) — worth doing before fully trusting this is
+      closed for good.
+      **Consequence for the "Fake/unvalidated ticket IDs" gap this
+      closes:** previously open, exploitable via manual entry
+      (demonstrated directly last session). Now built and tested at all
+      three points. `--no-verify` and cherry-pick still bypass
+      `pre-commit`/`post-commit` entirely, same structural limit as
+      every other pre-commit-based check in this repo — this closes the
+      "silently accepted" gap, not the "hooks can be skipped" one.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`

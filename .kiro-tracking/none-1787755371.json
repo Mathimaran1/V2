@@ -1,0 +1,12 @@
+{
+  "ticket_id": "none",
+  "source_of_ticket_id": "kiro_session",
+  "kiro_session_id": "sess_f26c0e32-3791-4d01-aa74-b0d8a39900cd",
+  "kiro_used": true,
+  "credits_used_so_far": 10.8300,
+  "credit_confidence": "low",
+  "episode_id": "ep_6a8d9907b3f4ea",
+  "dev": "gowthamaran006@gmail.com",
+  "branch": "ANG-000-test-pr-credits-flow",
+  "commit_time": "2026-08-26T14:42:51Z"
+}

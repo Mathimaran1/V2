@@ -42,14 +42,73 @@ gitleaks protect --staged || exit 1
 TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
 SOURCE="kiro_session"
 
+# Jira ticket-existence validation (EXISTENCE only, not assignment —
+# already explicitly decided against, see TODO.md 2026-08-26). A saved
+# ticket_id (SOURCE=kiro_session) is presumed already validated when it
+# was answered through Kiro's own ask-ticket hook, which checks the
+# real atlassian-rovo MCP connection — see
+# aidlc-ask-for-ticket-if-missing.json — so it's not re-checked here.
+# branch_name and manual_entry bypass Kiro entirely, so this hook
+# validates them itself.
+#
+# This is a plain git hook, not Kiro's agent — confirmed by inspecting
+# state.vscdb that it genuinely CANNOT reuse Kiro's own atlassian-rovo
+# OAuth session: the token/client/verifier secrets stored there are
+# Electron safeStorage-encrypted blobs (the "v11" version-prefix bytes),
+# gated behind gnome-keyring, not plainly readable outside Kiro's own
+# process. Closest alternative: a separately configured Jira Cloud API
+# token via JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN env vars
+# (standard Jira REST API v3 basic auth) — not yet provisioned anywhere
+# in this repo, so in practice every call below currently takes the
+# "skipped-no-credential" branch until someone sets those up. The curl
+# logic itself is real and tested — against a local mock server that
+# replicates Jira's exact API contract (200/404/timeout), not the real
+# Jira instance, since no credential exists here to test against for
+# real. See TODO.md's 2026-08-26 entry for the full test record.
+validate_jira_ticket() {
+  local ticket="$1"
+  if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
+    mkdir -p .kiro-tracking
+    echo "hook_status=pre-commit-jira-validation-skipped-no-credential ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
+    return 0  # can't check at all — degrade gracefully, accept unvalidated
+  fi
+  local http_code
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+    -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+    "$JIRA_BASE_URL/rest/api/3/issue/$ticket?fields=key" 2>/dev/null)
+  mkdir -p .kiro-tracking
+  if [ "$http_code" = "200" ]; then
+    return 0
+  elif [ "$http_code" = "404" ]; then
+    echo "hook_status=pre-commit-jira-validation-failed ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
+    return 1  # confirmed: does not exist
+  else
+    # timeout, network error, auth failure, 5xx — can't distinguish
+    # "invalid" from "couldn't check" on an inconclusive code, so
+    # degrade gracefully rather than reject on ambiguous evidence
+    echo "hook_status=pre-commit-jira-validation-unreachable ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket http_code=$http_code" >> .kiro-tracking/hook-health.log
+    return 0
+  fi
+}
+
 if [ -z "$TICKET_ID" ]; then
   TICKET_ID=$(git branch --show-current | grep -oE '^[A-Z]+-[0-9]+')
   SOURCE="branch_name"
+  if [ -n "$TICKET_ID" ] && ! validate_jira_ticket "$TICKET_ID"; then
+    echo "⚠️  $TICKET_ID (from branch name) doesn't appear to be a real Jira ticket — falling back to manual entry." >&2
+    TICKET_ID=""
+  fi
 fi
 
 if [ -z "$TICKET_ID" ]; then
   read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID < /dev/tty
   SOURCE="manual_entry"
+  if [ -n "$TICKET_ID" ] && [ "$TICKET_ID" != "none" ] && ! validate_jira_ticket "$TICKET_ID"; then
+    echo "❌ $TICKET_ID doesn't appear to be a real Jira ticket — please check the ID." >&2
+    echo "   Commit blocked rather than tracking an invalid ticket. Re-run" >&2
+    echo "   and type a real ticket ID (or 'none') at the prompt." >&2
+    exit 1
+  fi
 fi
 
 # Fail closed, not silently: hit for real (see TODO.md) — a blank read
