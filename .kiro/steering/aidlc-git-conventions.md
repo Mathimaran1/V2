@@ -80,6 +80,31 @@ All three produce `episode_id` values in the same format
 (`'ep_' + hex(unix_timestamp) + 3 random hex bytes`), so which case
 created a given episode isn't recoverable from the ID itself.
 
+## Before committing
+Open your profile panel (click the profile icon in the sidebar) to
+check your current credit usage before committing. This isn't just a
+habit — clicking it forces Kiro to refresh the cached usage number your
+commit's tracking will read, which is otherwise stale for up to ~30
+minutes.
+
+**Why this note exists, so it doesn't get deleted by someone who only
+sees the older conclusion:** an earlier investigation found that
+calling the dashboard command programmatically
+(`kiro.accountDashboard.showDashboard` via `executeCommand`) does
+**not** force a resync — `state.vscdb` stayed byte-identical after
+calling it directly. That's still true, and it's tempting to conclude
+from it that "clicking the dashboard doesn't help." **It doesn't
+generalize to the real UI click.** Tested twice, reproduced both times
+(see `TODO.md`'s 2026-08-26 entries): a human physically clicking the
+profile icon in the sidebar *does* force a real resync, persisted to
+`state.vscdb` — confirmed by the cache's own internal timestamp jumping
+to within seconds of the click, on two separate occasions, ruling out
+coincidental background syncs both times. The button and the command
+look like they'd do the same thing; they don't. Only the real click
+helps `pre-commit`'s read — see `.githooks/pre-commit`'s own comments
+at the point it reads `state.vscdb`, and the `credit_confidence` logic
+right after, which now uses this same freshness signal directly.
+
 ## Credit calculation rule
 `Kiro-Credits` is cumulative *within one episode* (one continuous
 credit baseline), not incremental per commit, and not directly
