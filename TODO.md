@@ -521,6 +521,69 @@ been made yet. Not bugs — just don't assume any of these are "done."
       Worth a deliberate follow-up, not a quiet edit alongside something
       else.
 
+## Dashboard resync: the physical click forces it, the command does not (2026-08-26)
+- [x] **Tested for real, both paths, and they are NOT the same code
+      path — correcting an assumption from the same investigation.
+      Reproduced a second time before building anything further, per
+      standard practice here — not just documented once.**
+      Earlier testing found `kiro.accountDashboard.showDashboard`
+      (called directly via `vscode.commands.executeCommand`, through a
+      throwaway extension) executes successfully and opens a real
+      webview, but leaves `state.vscdb`'s cached `currentUsage`/
+      `timestamp` byte-identical — no resync. That result was correct,
+      but it does not generalize to the actual UI button: had a human
+      physically click the profile icon in the sidebar (not simulated,
+      not the command) and compared `state.vscdb` immediately before and
+      after:
+      ```
+      Test 1  BEFORE: currentUsage = 249.25  timestamp = 2026-08-26T06:45:06Z
+      Test 1  AFTER:  currentUsage = 250.03  timestamp = 2026-08-26T07:26:24Z
+      Test 2  BEFORE: currentUsage = 250.03  timestamp = 2026-08-26T07:26:24Z
+      Test 2  AFTER:  currentUsage = 250.03  timestamp = 2026-08-26T07:56:39Z
+      ```
+      Both times, the timestamp landed within seconds of the click (12s,
+      then 10s before the follow-up read) — not a coincidental periodic
+      sync either time (41 min stale, then 29 min stale; nothing was due
+      to fire on its own). Test 2 is the sharper result: `currentUsage`
+      itself did NOT change (no new usage accrued in that window), but
+      the timestamp still moved — proving the **timestamp**, not the
+      value, is the reliable "a resync just happened" signal. The
+      physical click genuinely forces a resync that gets persisted to
+      disk, in the exact file every hook here reads.
+      **Practical consequence:** telling a dev to check their dashboard
+      before committing is not just a dev-facing habit — it can actually
+      freshen the number `pre-commit` reads, closing the sync-lag gap
+      for that one commit. Calling the command programmatically does
+      not have this effect; only the real UI interaction does. Not yet
+      identified: the actual internal event/API the click triggers that
+      the command doesn't (would need decompiling further into the
+      webview bundle to pin down, not done here).
+      **Built and tested, 2026-08-26 same day:** `credit_confidence` in
+      `.githooks/pre-commit` now uses this timestamp as direct evidence
+      instead of only guessing from elapsed-time-since-baseline — cache
+      under 2 min old forces high confidence regardless of elapsed time,
+      cache over 10 min old forces low regardless of elapsed time,
+      between the two the old elapsed-time heuristic still applies as
+      the fallback. Tested both override directions with real commits on
+      a throwaway branch:
+      - **Fresh click, immediate commit:** baseline set seconds earlier
+        (elapsed≈0s) with a 0.0000 delta — both old-logic conditions for
+        LOW were true — but the cache was genuinely fresh (real click,
+        46s old). Result: `Kiro-Confidence: high`. Old logic alone would
+        have said low; the override correctly promoted it.
+      - **Old baseline, stale cache:** baseline backdated 20 minutes
+        with a real non-zero delta (11.14) — both old-logic conditions
+        for HIGH were true — but the cache itself was aged 15 minutes
+        (via a scratch copy with only the `timestamp` field changed,
+        swapped into `pre-commit`'s hardcoded DB path for one commit,
+        then immediately restored; the real `state.vscdb` was never
+        touched — same technique as the credit-tampering test, applied
+        here to a normal, non-adversarial validation). Result:
+        `Kiro-Confidence: low`, `Kiro-Credits: 11.14`. Old logic alone
+        would have said high; the override correctly demoted it.
+      Both directions confirmed with real trailers from real commits,
+      not just reasoning about the shell logic.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
