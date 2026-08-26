@@ -1,4 +1,18 @@
 #!/bin/bash
+# Lightweight consent check — marker-file only, not the full interactive
+# "type I agree" flow (that lives in pre-commit and stays there). Runs
+# before the SonarQube-disabled early exit below, on purpose — it must
+# not become dead code once that block is removed and the real gate is
+# re-enabled. Never blocks a push over missing consent, just logs it —
+# see post-checkout for the same pattern and the reasoning in TODO.md,
+# 2026-08-26 "consent-in-every-hook" correction.
+CONSENT_VERSION="v2"
+CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
+if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
+  mkdir -p .kiro-tracking
+  echo "hook_status=pre-push-no-consent-marker ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> .kiro-tracking/hook-health.log
+fi
+
 # SonarQube gate temporarily disabled — no real SonarQube host/token configured
 # yet, so this would just fail against placeholder values. Remove this block
 # to re-enable once a real host is set up. Tracked in TODO.md at repo root —

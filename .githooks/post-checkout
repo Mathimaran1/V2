@@ -1,4 +1,18 @@
 #!/bin/bash
+# Lightweight consent check — marker-file only, not the full interactive
+# "type I agree" flow (that lives in pre-commit and stays there; a
+# branch switch shouldn't be gated behind a prompt for something that
+# doesn't itself write any tracking data). This just makes the gap
+# visible instead of silent: post-checkout and pre-push were the two
+# hooks that could run without ever touching consent (see TODO.md,
+# 2026-08-26 "consent-in-every-hook" correction). Never blocks.
+CONSENT_VERSION="v2"
+CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
+if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
+  mkdir -p .kiro-tracking
+  echo "hook_status=post-checkout-no-consent-marker ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> .kiro-tracking/hook-health.log
+fi
+
 if [ "$3" = "1" ]; then
   echo "{}" > .kiro/current-ticket.json
   echo "New branch — Kiro will ask for the ticket next time."

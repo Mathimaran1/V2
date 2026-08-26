@@ -449,27 +449,54 @@ been made yet. Not bugs — just don't assume any of these are "done."
       for real content before touching the file, leaving it alone
       otherwise so git's own check still fires. Tested both paths after
       the fix.
-- [x] **Consent check baked into every hook — done.** `pre-commit` now
-      checks a per-USER marker (`~/.kiro-tracking-consent-ack`, not
-      per-repo — consent is about the person) before anything else, even
-      gitleaks. Missing/unacknowledged → shows the tracking notice and
-      requires typing `I agree` exactly, blocking the commit otherwise
-      (same posture as gitleaks — fail closed, not a warning). Versioned
-      (`v1`) so a future change to what's tracked can force a re-prompt.
-      Closes the original gap: a dev committing through plain git, never
-      opening Kiro's UI at all, could never have been shown the notice
-      before. Tested: blocked with no input (confirmed, real commit
-      attempt), then confirmed the "already consented" path correctly
-      skips the prompt once the marker exists. **One real environment
-      limit hit while testing, not a bug:** couldn't fully exercise the
-      live `read -p` "type I agree" flow itself — piping input to `git
-      commit` doesn't reach the hook's stdin in this sandboxed setup
-      (same limitation as the original ticket-ID prompt, noted earlier
-      today), so the marker-exists path was tested by writing the marker
-      directly rather than typing through the actual prompt. The prompt
-      logic itself is simple bash (`read -p` + string compare) with low
-      risk of hidden behavior, but worth a real human running through it
+- [x] **Consent check added to `pre-commit`, the full interactive
+      flow.** Checks a per-USER marker (`~/.kiro-tracking-consent-ack`,
+      not per-repo — consent is about the person) before anything else,
+      even gitleaks. Missing/unacknowledged → shows the tracking notice
+      and requires typing `I agree` exactly, blocking the commit
+      otherwise (same posture as gitleaks — fail closed, not a
+      warning). Versioned (`v1` then `v2`) so a future change to what's
+      tracked can force a re-prompt. Closes the original gap: a dev
+      committing through plain git, never opening Kiro's UI at all,
+      could never have been shown the notice before. Tested: blocked
+      with no input (confirmed, real commit attempt), then confirmed
+      the "already consented" path correctly skips the prompt once the
+      marker exists. **One real environment limit hit while testing,
+      not a bug:** couldn't fully exercise the live `read -p` "type I
+      agree" flow itself — piping input to `git commit` doesn't reach
+      the hook's stdin in this sandboxed setup (same limitation as the
+      original ticket-ID prompt, noted earlier today), so the
+      marker-exists path was tested by writing the marker directly
+      rather than typing through the actual prompt. The prompt logic
+      itself is simple bash (`read -p` + string compare) with low risk
+      of hidden behavior, but worth a real human running through it
       once in an actual terminal before fully trusting it.
+      **Corrected 2026-08-26 — the title above originally said "baked
+      into every hook," which was never actually true.** A status
+      report caught it: consent logic only ever existed in
+      `pre-commit`, confirmed by grepping all 5 `.githooks/` files —
+      zero references in `post-commit`, `commit-msg`, `post-checkout`,
+      or `pre-push`. Since `pre-commit` runs first in a normal commit,
+      this mostly worked in practice, but `post-checkout` (a branch
+      switch) and `pre-push` could both run without ever touching
+      consent. **Fixed for real, not just relabeled:** both now carry a
+      lightweight marker-only check (same `$CONSENT_FILE`/
+      `$CONSENT_VERSION`, no interactive prompt duplicated) — missing
+      consent logs `hook_status=post-checkout-no-consent-marker` /
+      `hook_status=pre-push-no-consent-marker` to `hook-health.log` and
+      continues; neither a branch switch nor a push is blocked over it,
+      deliberately (too heavy-handed for hooks that don't themselves
+      write tracking data). Tested all four real paths directly (no
+      pty needed — the check itself doesn't read from a terminal):
+      consent missing → both hooks ran normally and logged; consent
+      restored → both hooks ran normally with zero new log lines.
+      **Structural limit, unchanged by this fix, stated plainly:**
+      `--no-verify` and cherry-pick still bypass `pre-commit` entirely
+      (confirmed exploitable last session), so a commit made either way
+      still never touches consent at all — this fix closes the
+      `post-checkout`/`pre-push` gap specifically, it does not make
+      consent unconditional across every possible way a commit can
+      land in this repo.
 - [x] **Coverage-number metric — local version done**, full AWS-scheduled
       version still not built (needs the AWS side generally, tracked
       separately). `scripts/coverage-report.sh`: tracked commits ÷ total,
