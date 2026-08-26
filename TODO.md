@@ -584,6 +584,114 @@ been made yet. Not bugs — just don't assume any of these are "done."
       Both directions confirmed with real trailers from real commits,
       not just reasoning about the shell logic.
 
+## Ask-to-click gate: three-way A/B/C split, matching ticket-switch pattern (2026-08-26)
+- [x] **Built and tested for real — CASE A and CASE C confirmed with
+      real commits; CASE B is explicitly NOT verified the same way and
+      documented as such, not glossed over.** Since a physical profile-
+      icon click forces a real resync but nothing here can trigger that
+      click automatically (see the dashboard-resync entry above), the
+      next question was how to actually get devs to click before
+      committing — reusing the same three-case structure already
+      proven for ticket-switch detection, since the underlying problem
+      is identical: a hook can prompt a real terminal, but has no way
+      to reach a human through a chat conversation, and no way to tell
+      "no human at all" apart from "a human is present in chat."
+      - **CASE A (TTY present)** — `.githooks/pre-commit` now asks,
+        right before reading `state.vscdb`: "Please click your profile
+        icon to refresh your credits, then press Enter to continue,"
+        and waits. Code-enforced. **Tested for real** via a genuine pty
+        (not a bare non-interactive shell): prompt appeared, was
+        answered, commit succeeded, and — correctly — no
+        no-TTY-skip log line was written (confirms the TTY-present
+        branch, not the fallback, actually ran).
+      - **CASE B (agent committing during an active chat turn with a
+        human present)** — new steering rule in `aidlc-git-
+        conventions.md`: ask in chat before running the commit, wait
+        for the reply. **Explicitly behavior-dependent, not code-
+        enforced** — a hook cannot detect "a human is present in this
+        conversation" at all, so there is no way to test this the way
+        A and C were tested; it depends entirely on the agent
+        recognizing the situation and following the rule. Documented
+        as best-effort only, same honest framing as CASE B of the
+        episode-boundary restructure above — not claimed as verified
+        when it isn't.
+      - **CASE C (no TTY — fully autonomous/background commit)** —
+        same `{ : < /dev/tty; } 2>/dev/null` check already proven for
+        post-commit's ticket-switch fallback (not `[ -t 0 ]` — already
+        tested and found wrong for this exact purpose). Nothing is
+        asked; the commit proceeds. **Tested for real** with a genuine
+        no-TTY subprocess commit (same method as the earlier
+        agent-initiated-commit tests): completed in well under a
+        timeout safety net, no hang, correctly logged
+        `hook_status=pre-commit-refresh-prompt-skipped-no-tty` to
+        `hook-health.log`, and the resulting trailer showed
+        `Kiro-Confidence: low` as expected — no special forced-low code
+        was needed for this, since the existing cache-freshness check
+        (built in the entry above) already produces low confidence on
+        its own when nobody has clicked recently.
+      **Detection boundary, stated plainly:** the TTY check reliably
+      splits A from (B or C) — tested. It cannot split B from C — that
+      split is only ever correct if the agent actually follows the
+      CASE B steering rule; there is no code-level backstop for it the
+      way CASE C's `hook-health.log` entry backstops the ticket-switch
+      CASE B.
+      **Correction, same day — see the entry directly below:** the
+      claim just above ("the TTY check reliably splits A from (B or
+      C)") turned out to be wrong. It was true for a bare no-TTY
+      subprocess, but not for an agent running `git commit` through its
+      own tool-execution mechanism, which can have a real TTY attached
+      too — that's a genuinely different case this entry didn't
+      account for, not just a restatement of the original no-TTY test.
+
+## Ask-to-click gate: TTY presence cannot distinguish a human terminal from an agent's own tool-call shell (2026-08-26)
+- [x] **Real bug found and fixed, same day as the entry above — TTY
+      alone was insufficient, confirmed by observing it happen, not
+      predicted in advance.** The entry above assumed `/dev/tty` being
+      openable meant CASE A specifically (a human typing in a real
+      terminal) — reusing the same check already proven for post-
+      commit's no-TTY ticket-switch fallback. That check IS still valid
+      for its original purpose (a bare, fully headless subprocess has
+      no TTY at all, confirmed by testing earlier this project). It is
+      **not** sufficient to distinguish a human's terminal from an
+      agent's own tool-execution shell, because the latter can also
+      have a real TTY attached — not guaranteed TTY-less the way a bare
+      subprocess is. Observed effect: an agent-run commit took the
+      CASE A branch, and the terminal prompt ("Please click your
+      profile icon...") got dumped into the chat transcript as inert
+      text — nobody was watching a real terminal to answer it, so it
+      just sat there unanswered rather than hanging or failing loudly.
+      **Fix:** stop relying on TTY detection to guess whether the agent
+      or a human is running the commit — have the agent self-identify
+      explicitly instead. New steering rule in `aidlc-git-
+      conventions.md`: before running `git commit` yourself, ask the
+      user in chat first, wait for their actual reply, and only then
+      run `KIRO_AGENT_COMMIT=1 git commit -m "..."`. `pre-commit` now
+      checks `$KIRO_AGENT_COMMIT` *before* the TTY check — if set, skips
+      the terminal prompt entirely and logs
+      `hook_status=pre-commit-refresh-confirmed-via-chat` instead of
+      attempting to read from a TTY nobody may be watching.
+      **Tested for real, both paths:**
+      - **CASE A (no env var, real terminal, via a genuine pty):**
+        unaffected by the fix — prompt appeared, was answered, commit
+        succeeded, and `hook-health.log`'s last entry was a plain
+        `hook_status=ok`, not the chat-confirmed line (confirms the
+        original branch, not the new one, correctly ran here).
+      - **CASE B (the actual live chat test):** asked the user directly
+        in this conversation — "Please click your profile icon to
+        refresh your credits, then let me know when you're ready to
+        commit" — and genuinely waited for their reply before running
+        anything, in the real chat transcript (not simulated). See the
+        session transcript for the exact exchange and the commit that
+        followed with `KIRO_AGENT_COMMIT=1` set.
+      **Residual gap, stated honestly, not solved by this fix:** a
+      truly autonomous, no-human commit that happens to run through a
+      TTY-attached shell, where the agent also fails to correctly omit
+      `$KIRO_AGENT_COMMIT`, would still hit the CASE A branch and dump
+      an unanswered prompt — same failure mode, different trigger. This
+      fix closes the specific, confirmed chat-present misdetection; it
+      is not a complete guarantee against every unattended-TTY
+      scenario.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
