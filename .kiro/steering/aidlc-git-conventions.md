@@ -105,6 +105,86 @@ helps `pre-commit`'s read — see `.githooks/pre-commit`'s own comments
 at the point it reads `state.vscdb`, and the `credit_confidence` logic
 right after, which now uses this same freshness signal directly.
 
+### Three cases, same A/B/C pattern as episode boundaries above
+Getting a dev to actually click before a commit reads their credits
+needs the same three-way split as ticket-switch detection, for the
+same underlying reason: a hook can prompt into a real terminal, but has
+no way to reach a human through a chat conversation, and no way to
+tell "no human at all" apart from "a human is present in chat" — that
+gap can only be closed by agent behavior, not hook code.
+
+**Bug found and fixed 2026-08-26 — read this before assuming TTY
+presence means "human":** the original design assumed `/dev/tty` being
+openable reliably meant CASE A (a human typing in a real terminal).
+That assumption was wrong — an agent running `git commit` through its
+own tool-execution mechanism can also have a real TTY attached, not
+just a bare subprocess. Result: an agent-run commit took the CASE A
+branch, and the terminal prompt got dumped into the chat transcript as
+inert text instead of a real, answerable question — nobody was watching
+a terminal to answer it. The fix below has you (the agent) self-
+identify explicitly via an environment variable, rather than the hook
+guessing from TTY presence alone.
+
+- **CASE A — human typing the commit in a real terminal.** No
+  `$KIRO_AGENT_COMMIT` set, and `.githooks/pre-commit` finds a TTY. It
+  asks directly, before reading `state.vscdb`: "Please click your
+  profile icon to refresh your credits, then press Enter to continue,"
+  and waits for Enter. **Code-enforced** — a real hook, always runs,
+  cannot be forgotten, same guarantee level as CASE A of episode
+  boundaries above.
+
+- **CASE B — you (the agent) are committing as part of an active chat
+  turn with a human present.** Whenever you are about to run
+  `git commit` yourself as a tool call: **first**, ask the user in
+  chat — "Please click your profile icon to refresh your credits, then
+  let me know when you're ready to commit" — and **wait for their
+  actual reply** before doing anything else. Only once they confirm,
+  run the commit prefixed with the flag that tells the hook this
+  already happened in chat:
+  ```
+  KIRO_AGENT_COMMIT=1 git commit -m "..."
+  ```
+  `pre-commit` checks for `$KIRO_AGENT_COMMIT` *first*, before the TTY
+  check — if set, it skips the terminal prompt entirely (there may be a
+  TTY attached, but nobody is watching it — see the bug above) and logs
+  `hook_status=pre-commit-refresh-confirmed-via-chat` instead.
+  **Still behavior-dependent, not fully code-enforced — the same honest
+  limit as CASE B of episode boundaries above** — but narrower now than
+  before the fix: a hook still can't verify a human was actually asked
+  and actually replied in chat, but it CAN verify the agent explicitly
+  claimed that happened (via the env var), which is a real, checkable
+  signal — TTY presence alone was not.
+
+- **CASE C — Kiro committing with no human present at all (fully
+  autonomous/background execution, no active chat turn, and correctly
+  not setting `$KIRO_AGENT_COMMIT` since there was no one to ask).**
+  `.githooks/pre-commit` falls through to the same `{ : < /dev/tty; }
+  2>/dev/null` check as before (deliberately not `[ -t 0 ]` — already
+  tested and found to read false even for genuine human-typed commits)
+  and does **not** attempt to ask anything when no TTY is present. The
+  commit proceeds normally; `credit_confidence`'s existing cache-
+  freshness check already handles this correctly with no special-
+  casing — nobody clicked, so the cache stays stale, and confidence
+  correctly comes out low. **Residual gap, not fully closed by this
+  fix:** if a truly autonomous, no-human commit happens to run through
+  a shell that has a TTY attached (the same condition that caused the
+  original bug) AND the agent fails to omit `$KIRO_AGENT_COMMIT`
+  correctly, it would still fall into the CASE A branch and dump a
+  prompt nobody answers. This fix closes the specific, confirmed
+  chat-present misdetection; it does not add a code-level guarantee for
+  every possible unattended-TTY scenario.
+
+**Detection boundary, stated plainly, corrected from the earlier
+(wrong) version of this doc:** TTY presence does **not** reliably split
+CASE A from (B or C) on its own — that was the bug. `$KIRO_AGENT_COMMIT`
+is what actually splits CASE B off, and only when you (the agent) set
+it correctly, which itself depends on you actually asking in chat and
+waiting for a real reply first. Treat CASE A's terminal prompt as
+reliable when no env var is set; treat CASE B as sound only to the
+extent you follow the rule above every time — there is still no code
+in this repo that can independently verify a chat exchange actually
+happened.
+
 ## Credit calculation rule
 `Kiro-Credits` is cumulative *within one episode* (one continuous
 credit baseline), not incremental per commit, and not directly
