@@ -1,82 +1,408 @@
-# v1 — Kiro + Jira + AWS Tracking
+# v1 — Kiro + Jira + AWS Usage/Credit Tracking
 
-Company-level project: tracks Kiro usage and code quality per Jira ticket,
-from a dev's first commit through the AWS pipeline to an admin-only
-dashboard. Full design in [`docs/runbook.md`](docs/runbook.md) and
-[`docs/architecture.png`](docs/architecture.png).
+## 1. What this is
 
-**Source repo:** running on GitHub today — this account's AWS CodeCommit
-access is blocked (closed to new customers since July 2024, confirmed
-against this account). The whole codebase is written to not care which one
-it is: see [`docs/source-repo-decision.md`](docs/source-repo-decision.md)
-and [`infra/pipeline.source.json`](infra/pipeline.source.json) — that one
-file is the only thing that changes to switch to CodeCommit later.
+This project ties AI-assisted development spend to the work it actually
+paid for. Every commit a developer makes while using Kiro gets stamped
+with which Jira ticket it belongs to, how many Kiro credits were spent
+on that ticket so far, and how confident the tooling is in that number
+— all as plain trailers on the commit message itself, readable by
+anyone with `git log`, no separate system to query. The goal is a
+company being able to answer "what did ticket ANG-123 actually cost in
+AI usage" without asking anyone, and eventually feeding that alongside
+code-quality results (SonarQube) into an admin dashboard. It exists
+because none of that attribution happens on its own — Kiro tracks
+account-wide usage, not per-ticket, and nothing connects a credit spend
+to a Jira ticket unless something is built to do it.
 
-## Build order
+## 2. Architecture overview
 
-1. **Steering** — `.kiro/steering/aidlc-git-conventions.md` (already in place)
-2. **MCP → Jira** — `.kiro/settings/mcp.json` (fill in real hosts/tokens). SonarQube
-   is not an MCP connection — it's called directly via `sonar-scanner` in
-   `.githooks/pre-push` (currently disabled with a warning; see below).
-3. **Specs** — plan each ticket in Kiro before coding
-4. **Hooks** — `.kiro/hooks/`, `.githooks/` (already in place, see setup below)
-5. **Powers** — check Kiro's Powers catalog before hand-rolling more MCP config
-6. **Enterprise settings** — turn on admin reporting only once the workflow works end to end
+```
+Jira ticket ──▶ Kiro (asks which ticket, tracks credits) ──▶ git hooks
+   (assigns          (.kiro/hooks/, .kiro/steering/)         (.githooks/)
+    work)                                                         │
+                                                                   ▼
+                                                    commit, stamped with
+                                                    Kiro-Ticket/Episode/
+                                                    Credits/Confidence/
+                                                    Session/Source trailers
+                                                                   │
+                                          ┌────────────────────────┴──────────────────────┐
+                                          ▼                                                ▼
+                                  git push → pre-push                              PR opened → PR-gate
+                                  (SonarQube gate —                                check for Kiro tag
+                                   currently disabled,                             (AWS Lambda — NOT BUILT,
+                                   see §6)                                          blocked on write access)
+                                          │
+                                          ▼
+                              GitHub today (CodeCommit blocked for
+                              this AWS account — see §7). Pipeline
+                              source is a single config switch,
+                              infra/pipeline.source.json.
+                                          │
+                                          ▼
+                          Admin dashboard (DuckDB over S3 JSON) —
+                          NOT BUILT. Its query still assumes the old
+                          S3-JSON design (see §6); the real source of
+                          truth moved to commit trailers 2026-08-25 and
+                          the dashboard query hasn't caught up yet.
+```
 
-See `docs/runbook.md` section 0 for the full reasoning behind this order.
+**What's actually built and working today:** everything from "Jira
+ticket" through "commit, stamped with trailers" — the whole dev-laptop
+side. `scripts/calculate-pr-credits.sh` can total a ticket's real
+credit cost from trailers alone, right now, with no AWS involvement.
 
-## One-time setup
+**What's designed but not built:** everything AWS-side — the PR-gate
+Lambda, daily/weekly health checks, Jira/SonarQube webhook receivers,
+the DuckDB dashboard. All of it is blocked on the same thing: this
+account's AWS role (`kiro-s3-readonly`) is read-only. There is no
+write-capable role yet, so none of this has anything to deploy against
+or test end-to-end. This isn't "not gotten to it yet" — it's blocked on
+an infrastructure decision outside this repo (see §8).
+
+## 3. How ticket tracking works
+
+Every commit gets tagged with a `Kiro-Ticket` and a `Kiro-Episode` —
+the second one exists because credit totals are *cumulative since a
+baseline*, not per-commit (see §4), so the tooling needs to know when
+that baseline last reset. A fresh `episode_id` gets generated by
+exactly one of three triggers, deliberately built with different
+reliability guarantees:
+
+- **CASE A — branch switch.** `.githooks/post-checkout` clears
+  `.kiro/current-ticket.json` on any branch checkout (`$3=1`); the next
+  ask-ticket prompt regenerates the baseline and episode. **Code-
+  enforced** — a real git hook, cannot be skipped by forgetting.
+  **Known bug, still open** (see §6): this same `$3=1` check also fires
+  on `git rebase`, which has nothing to do with switching branches or
+  tickets — confirmed by reproducing it twice on a real branch.
+
+- **CASE B — post-commit direct question. The primary, reliable
+  mechanism.** `.githooks/post-commit` asks, right after every
+  commit: *"Working on a different ticket now? (y/n)."* "y" generates
+  a fresh baseline and episode; anything else leaves the file
+  untouched. **Code-enforced** for a human typing in a real terminal.
+  For an agent running the commit itself with no human present, this
+  question can't be answered (nobody's watching the terminal), so it's
+  skipped and logged to `.kiro-tracking/hook-health.log` instead of
+  hanging — deliberately not silent.
+
+- **CASE C — AI-detected mid-conversation switch. Secondary, best-
+  effort.** The `UserPromptSubmit` hook
+  (`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`) also watches
+  conversation for signs the dev is now working on a different
+  specific ticket, and asks to confirm before anything's committed.
+  **Be honest about this one:** it depends on Kiro's agent correctly
+  recognizing a switch from natural language — there is no code-level
+  guarantee it fires at the right moment, only that the mechanism
+  exists. Treat it as a safety net, not the thing to rely on.
+
+All three produce identically-shaped `episode_id` values
+(`'ep_' + hex(unix_timestamp) + 3 random hex bytes`), so which case
+created a given episode isn't recoverable from the ID itself — by
+design, since the aggregation logic (§4) doesn't need to know.
+
+There's a parallel three-case split for a *second* problem — getting a
+dev to actually refresh their credit number before a commit reads it
+(§4's sync-lag finding). It reuses the exact same A/B/C shape and the
+same honesty about which parts are code-guaranteed vs. behavior-
+dependent; see `.kiro/steering/aidlc-git-conventions.md`'s "Before
+committing" section for the full detail, since it's really a variant
+of the same underlying problem (a hook can prompt a terminal, but has
+no way to reach or verify a human in a chat conversation).
+
+## 4. How credit tracking works
+
+**The source.** Kiro's own credit usage lives in
+`~/.config/Kiro/User/globalStorage/state.vscdb`, a local SQLite file —
+key `kiro.kiroAgent` in table `ItemTable`, a JSON blob whose
+`kiro.resourceNotifications.usageState.usageBreakdowns[0].currentUsage`
+field is the account-wide running total. This is the *only* real
+number available — an early idea to use a `kiro-session-info` command
+turned out not to exist at all (`sqlite3` CLI isn't installed on this
+machine either, so a naive `cat`/`head` read of the binary file once
+produced a plausible-looking but entirely fabricated number, `168.77`
+— see §9). `pre-commit` reads this file directly via `python3`.
+
+**The sync-lag finding, and the correction to it.** This cache doesn't
+update live — it updates whenever Kiro's own client happens to make a
+`GetUsageLimitsCommand` AWS call, which correlates with activity but
+isn't on a fixed schedule; a real observed gap once ran to ~30 minutes.
+A `pre-commit` read soon after a fresh baseline can show `0.0000`
+credits used even when real work happened. Two things were tested
+about forcing a fresh read:
+- Calling `kiro.accountDashboard.showDashboard` programmatically (via
+  `vscode.commands.executeCommand`) does **not** force a resync —
+  confirmed by executing it directly and finding `state.vscdb`
+  byte-identical before and after.
+- A human **physically clicking** the profile icon in Kiro's sidebar
+  **does** force a real resync — confirmed twice, independently: the
+  cache's own internal `timestamp` field jumped to within 10–12
+  seconds of the click both times, ruling out a coincidental
+  background sync (the cache was 41 and 29 minutes stale respectively
+  right before each click). The second test is the sharper proof:
+  `currentUsage` itself didn't change that time (no new usage had
+  accrued), but the timestamp still moved — the **timestamp**, not the
+  value, is the real "did this just refresh" signal.
+
+These two facts don't contradict — the button and the command look
+like they'd do the same thing, but they're wired to different code
+paths. Only the real UI click helps.
+
+**`credit_confidence`.** Every tracking record gets a `"high"`/`"low"`
+flag. It uses two signals: how long ago the ticket's baseline was set
+(a *guess* — under 5 minutes, or a delta of exactly `0.0000`, means
+low), and — since the resync finding above — how recently
+`state.vscdb`'s own internal timestamp was actually updated (*direct
+evidence*: under 2 minutes old forces high regardless of elapsed time;
+over 10 minutes old forces low regardless of elapsed time; the elapsed-
+time guess is only the fallback in between). Both directions were
+tested with real commits: a baseline set seconds earlier with a
+`0.0000` delta (both old-logic signals said "low") came back `high`
+once a genuinely fresh click was behind it; a baseline backdated 20
+minutes with a real non-zero delta (both old-logic signals said "high")
+came back `low` once the cache itself was confirmed stale.
+
+**Max-per-episode-then-sum, not a direct sum.** `Kiro-Credits` is
+cumulative *since the episode's own baseline*, not incremental per
+commit — each value already contains everything since that baseline.
+Summing raw values across commits in the same episode would
+double-count everything after the first commit. The correct
+aggregation (`scripts/calculate-pr-credits.sh`, and the intended
+DuckDB dashboard query) takes the **max** `Kiro-Credits` per
+`(ticket_id, episode_id)` pair, then **sums** those per-episode maxes
+per ticket — because a *new* episode really does start a fresh,
+independent baseline that shouldn't be netted against the old one.
+Worked example from real testing: two episodes on one ticket, one
+maxing at `5.0`, the other at `max(0.8, 1.2) = 1.2` → total `6.2`, not
+`5.0 + 0.8 + 1.2 = 7.0`.
+
+**Jira ticket-existence validation.** A typed or branch-derived ticket
+ID gets checked against Jira before being trusted, at every point one
+gets set: Kiro's own ask-ticket hook via the `atlassian-rovo` MCP
+connection, and `pre-commit`/`post-commit`'s branch-name/manual-
+entry/switch paths via a direct Jira REST API call (the MCP session's
+OAuth token was confirmed — by inspecting `state.vscdb` — to be an
+Electron `safeStorage`-encrypted blob gated behind gnome-keyring, not
+readable outside Kiro's own process, so the hooks use a separately-
+configured `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN` instead). This
+is *existence*-checking only — see §7 for why assignment-checking is
+explicitly out of scope. If Jira can't be reached, or no credential is
+configured, validation degrades gracefully (warns, doesn't block) —
+only a confirmed "doesn't exist" rejects an ID. **Tested and working at
+all three points**, including live through a real Kiro chat session for
+the MCP path (a real query against a nonexistent ticket ID was
+correctly rejected).
+
+**Known quirk, fixed but worth watching:** on that live MCP test,
+Kiro's *first* attempt guessed a `cloudId` of
+`"https://animedisciples.atlassian.net"` — an unrelated site nobody
+configured anywhere in this repo (confirmed: nothing here specifies a
+`cloudId` at all) — and only got the real one
+(`teamlease-tech.atlassian.net`) by self-correcting with a
+`getAccessibleAtlassianResources` call on a second attempt. A guess
+that happens to self-correct once isn't something to trust in an
+unattended run with nobody watching to catch a failed self-correction,
+so the hook's instruction now requires looking up the real `cloudId`
+first, every time, rather than guessing — but that specific fix has not
+yet been re-confirmed live (would need another real Kiro run to verify
+the guess is actually gone, not just instructed against).
+
+## 5. Setup instructions
 
 ```bash
 git init                              # if not already a repo
 git config core.hooksPath .githooks
 chmod +x .githooks/*
-git config commit.template .gitmessage
+git config commit.template .gitmessage   # optional — pre-fills Co-authored-by
 ```
 
-Every dev on the project has to run the `git config core.hooksPath` line
-once, or none of the tracking hooks fire on their machine. The
-`commit.template` line is optional but recommended — pre-fills a
-`Co-authored-by:` line in your editor for pair-programming commits, so it's
-one word to fill in rather than something to remember (see `.gitmessage`).
+Every dev has to run the `core.hooksPath` line once, or none of the
+tracking hooks fire on their machine — there is currently no reliable
+automatic way to do this for them. (A bootstrap hook,
+`.kiro/hooks/aidlc-bootstrap-git-hooks.json`, exists to automate this,
+but its first trigger choice, `sessionStarted`, was confirmed — two
+independent ways — to never actually fire in Kiro's agent runtime. It
+was switched to `PostFileSave`; that fix has **not** been independently
+confirmed working end-to-end yet.)
 
-## What still needs to be filled in before this is live
+**Consent.** The first commit on any machine will block and ask you to
+type `I agree` — this records a per-user marker
+(`~/.kiro-tracking-consent-ack`), not a per-repo one, since consent is
+about the person. `post-checkout` and `pre-push` also check this marker
+(added later — see §6) but never block on it, only log if it's missing.
 
-- `.githooks/pre-commit` / `pre-push` — real S3 bucket name (`your-tracking-bucket`)
-- `.githooks/pre-push` — real SonarQube project key + host (this is where SonarQube
-  setup actually happens — not `mcp.json`, SonarQube isn't MCP-integrated)
-- AWS side (not yet scaffolded here): PR-gate Lambda, daily/weekly health
-  checks, Jira/SonarQube webhook receivers, EventBridge rule for
-  CodePipeline, the DuckDB-over-S3 dashboard Lambda — see `docs/runbook.md`
-  sections 2 and 4. When this gets built, the pipeline's source stage must
-  read from `infra/pipeline.source.json` (see above), not hardcode GitHub
-  or CodeCommit.
-- `infra/pipeline.source.json` → `github.connectionArn` — real CodeStar
-  Connections ARN once one is authorized against the GitHub org/repo.
-- Legal sign-off on what's tracked, before turning this on for real (`docs/runbook.md` section 7)
+**Environment variables for Jira validation** (optional; without them,
+existence-checking silently no-ops rather than blocking anyone):
+```bash
+export JIRA_BASE_URL="https://your-instance.atlassian.net"
+export JIRA_EMAIL="you@example.com"
+export JIRA_API_TOKEN="..."          # a Jira Cloud API token, not your password
+```
+
+**Still placeholder values, not yet real** (see §8 for what unblocks
+each):
+- `.githooks/pre-push` — real SonarQube project key + host
+  (`YOUR_PROJECT` / `your-sonarqube-host` today)
+- `.githooks/pre-push` — real S3 bucket name, if/when a write-capable
+  role exists (`your-tracking-bucket` today). `pre-commit`'s own S3
+  upload was removed entirely 2026-08-25 — see §7, trailers are the
+  real source of truth now, this placeholder only remains in the
+  SonarQube-gate-result upload inside the still-disabled `pre-push`.
+- `infra/pipeline.source.json` → `github.connectionArn` — a real
+  CodeStar Connections ARN
+- Legal sign-off on what's tracked, before this goes live for real
+  (`docs/runbook.md` section 7)
 
 ## Layout
 
 ```
 .kiro/
   steering/aidlc-git-conventions.md   # rules Kiro always follows
-  settings/mcp.json            # Jira MCP connection (SonarQube isn't MCP — see .githooks/pre-push)
-  hooks/aidlc-ask-for-ticket-if-missing.json  # Kiro-side hook: ask which ticket (once per branch), and detect mid-session switches
-  hooks/aidlc-bootstrap-git-hooks.json        # Kiro-side hook: set up .githooks/ + core.hooksPath automatically on session start if missing
-  current-ticket.json          # local, gitignored — current ticket + starting credits
+  settings/mcp.json                   # Jira MCP connection (SonarQube isn't MCP)
+  hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C (§3)
+  hooks/aidlc-bootstrap-git-hooks.json        # auto-sets up .githooks/ (unconfirmed trigger — §5)
+  current-ticket.json                 # local, gitignored — current ticket + starting credits
 .githooks/
-  post-checkout                # clears current-ticket.json on new branch
-  pre-commit                   # writes the tracking record + Kiro tag, mirrors to S3
-  pre-push                     # SonarQube quality gate, warn/block via SSM
-  commit-msg                   # stamps Kiro-Session / Kiro-Credits onto the commit message
-.kiro-tracking/                # per-commit tracking JSON + hook-health.log (mostly gitignored in practice)
+  post-checkout   # CASE A of episode boundaries (§3); also the rebase bug (§6)
+  pre-commit      # ticket resolution + Jira validation + credit read + tracking-data write
+  post-commit     # CASE B of episode boundaries (§3); also Jira-validates a switch
+  pre-push        # SonarQube gate — disabled with a warning (§6)
+  commit-msg      # stamps all six Kiro-* trailers onto the commit message
+.kiro-tracking/    # per-commit tracking JSON (convenience copy, not source of truth)
+                   # + hook-health.log (gitignored — local diagnostic only, see §6)
 docs/
-  runbook.md                   # full design doc
-  architecture.png             # system diagram
-  source-repo-decision.md      # why GitHub now / CodeCommit later, and how to switch
+  runbook.md                # full design doc (some sections predate the trailers-not-S3
+                             # pivot — see §6, "DuckDB dashboard still assumes S3")
+  architecture.png
+  source-repo-decision.md   # why GitHub now / CodeCommit later
 infra/
-  pipeline.source.json         # single switch point: which repo provider CodePipeline reads from
+  pipeline.source.json      # single switch point: which repo provider CodePipeline reads from
 scripts/
-  coverage-report.sh           # local version of "tracked commits ÷ total, per dev" — no AWS needed
-  calculate-pr-credits.sh      # total Kiro credits for a PR/range — max per episode, sum per ticket
+  coverage-report.sh        # tracked-commits ÷ total, per dev — works today, no AWS needed
+  calculate-pr-credits.sh   # real per-ticket credit total from trailers — works today
 ```
+
+## 6. Known limitations — read this section, don't skip to the setup
+
+This list is deliberately as visible as the features section. Every
+item below was confirmed by actually testing it, not inferred.
+
+| Gap | Status | Why |
+|---|---|---|
+| `git rebase` clears `current-ticket.json` | **Open, fixable with code** | `post-checkout`'s `$3=1` check means "this checkout moved via a branch-level ref," which rebase triggers internally too — confirmed by reproducing it twice. Fix needs `post-checkout` to also check the ref actually changed and/or HEAD landed on a branch, not just trust `$3=1` alone. |
+| Amend/rebase creates duplicate local `.kiro-tracking/*.json` files | **Open, corrected design exists, not built** | Each amend re-runs `pre-commit`, which writes a fresh file every time. A patch-the-real-SHA-in-afterward fix was designed (needs a new logic in `post-commit`, since `pre-commit` can't know its own future SHA), but never built — it targeted the old S3-as-source-of-truth design. Lower-stakes now that trailers, not these local files, are what `calculate-pr-credits.sh` actually reads. |
+| `git cherry-pick` skips every hook | **Open — standard git behavior, cannot be fixed locally** | Confirmed: no gitleaks banner, `hook-health.log` untouched, trailers byte-identical to the original rather than regenerated. A cherry-picked commit is not secret-scanned. |
+| `--no-verify` / unset `core.hooksPath` bypass tracking entirely | **Open — standard git escape hatches** | Nothing local can prevent these; only server-side enforcement (the not-yet-built PR-gate Lambda, §2) could catch a commit missing its Kiro tag after the fact. |
+| Consent lived only in `pre-commit`, not every hook | **Fixed 2026-08-26** | A status report caught the "baked into every hook" claim was never true — confirmed by grepping all 5 hooks. `post-checkout` and `pre-push` now carry a lightweight marker-only check (logs, never blocks). Does **not** close the `--no-verify`/cherry-pick gap above — those still skip `pre-commit` (and thus consent) entirely. |
+| Fake/unvalidated ticket IDs accepted silently | **Fixed 2026-08-26** | Existence-checking built and tested at all three points a ticket ID gets set (§4) — 9 mechanical scenarios plus a live Kiro chat session confirming the MCP path for real. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass this like every other pre-commit-based check. |
+| Squash-merge loses all per-commit trailers | **Open — structural limit of trailer-based tracking** | Confirmed directly: 3 commits with distinct trailers, squashed, and the result has none of them. No fix proposed — this is a real cost of storing tracking data in commit messages instead of an external system. |
+| `hook-health.log` has no integrity protection | **Open — and not git-tracked at all** | Deliberately gitignored (it's local diagnostic noise, not the tracking record). Anyone can edit or delete it with zero trace, and it was never shared to begin with. |
+| The credit number's own source is a locally-writable SQLite cache | **Open — structural, root of the trust model** | `state.vscdb` has no signature, no server round-trip check. Whoever controls the laptop controls the number every trailer, delta, and dashboard total ultimately traces back to. |
+| SonarQube quality gate | **Disabled with a loud warning, deliberately** | No real host/token configured yet (`YOUR_PROJECT` / `your-sonarqube-host` placeholders). `pre-push` prints a triple-⚠️ warning on every push while this is true rather than silently skipping. |
+| DuckDB dashboard query still assumes S3 JSON | **Open, flagged not fixed** | The real source of truth moved to commit trailers 2026-08-25; the dashboard design in `docs/runbook.md` hasn't been updated to match — it would need to read commit messages via git/GitHub API instead of (or alongside) S3. |
+| `calculate-pr-credits.sh --repo/--pr` path | **Built, not fully tested** | Verified it fails cleanly against a nonexistent repo/PR; this repo has no real remote PR to test the success path against yet. The `--range` path (local git history) is fully tested. |
+
+## 7. Decisions made, and why
+
+- **Jira ticket-*assignment*-checking — decided against.** Only
+  *existence* is validated. Reason: pairing, mid-work reassignment, and
+  email-format mismatches between a dev's git identity and their Jira
+  account would all produce false warnings for completely normal work.
+- **A background credit-sync watcher (cron/daemon polling
+  `state.vscdb`) — decided against**, in favor of the per-commit delta
+  read plus `credit_confidence` flagging. Reason: the cache only
+  updates via Kiro's own internal AWS auth flow (confirmed by
+  correlating cache jumps against logged `GetUsageLimitsCommand` calls)
+  — replicating that safely in a git hook or standalone watcher would
+  mean reverse-engineering undocumented internals and adding a hard
+  network dependency to something that currently needs neither.
+- **Commit-message trailers instead of an S3 JSON upload, as the
+  source of truth.** The original design uploaded a tracking JSON file
+  to S3 on every commit; it failed on every single commit all session,
+  because the configured AWS role (`kiro-s3-readonly`) is read-only.
+  Trailers need no AWS access at all, in either direction.
+- **`scripts/calculate-pr-credits.sh` built against local git + `gh`,
+  not `aws codecommit get-commit`** as originally specified — this
+  account's CodeCommit access is blocked entirely (closed to new
+  customers since July 2024), so that version would have been
+  unverifiable from day one.
+- **GitHub as the source repo now, CodeCommit later if ever** — same
+  CodeCommit-blocked reason above. The whole codebase is written not to
+  care which one it is: `infra/pipeline.source.json` is the one file
+  that changes to switch.
+- **The bootstrap hook's trigger, `sessionStarted` → `PostFileSave`.**
+  `sessionStarted` doesn't even appear as an option in Kiro's own Agent
+  Hooks panel, and a direct end-to-end test (fresh-clone state, real
+  new session) confirmed it never fires. `PostFileSave` was the trigger
+  Kiro's own "+ Create Hook" UI defaulted to, so it was tried next —
+  not yet independently confirmed working (see §5).
+- **TTY presence, replaced by explicit self-identification
+  (`$KIRO_AGENT_COMMIT`), for telling a human's terminal apart from an
+  agent's own commit.** The original design assumed an open `/dev/tty`
+  reliably meant a human. It doesn't — an agent's own tool-execution
+  shell can have a real TTY too, confirmed by observing it happen: an
+  agent-run commit dumped a "please click your profile icon" prompt
+  into a chat transcript as inert text, unanswerable. The fix has the
+  agent ask in chat first, wait for a real reply, then set an env var
+  the hook can actually check — a real signal, unlike guessing from TTY
+  presence.
+
+## 8. What's still open
+
+**Fixable with code, no external blocker:**
+- `post-checkout` clearing `current-ticket.json` on `git rebase` (§6)
+- Amend/rebase duplicate local tracking-file cleanup (design exists, not built)
+- DuckDB dashboard query still targeting S3 instead of commit trailers
+- `calculate-pr-credits.sh --repo/--pr`'s success path, untested against a real PR
+- Confirming the `PostFileSave` bootstrap-hook trigger actually fires end-to-end
+- Re-confirming live that the Jira-validation hook's `cloudId` fix (§4) actually stops the guess-then-self-correct pattern, not just that the instruction now forbids it
+
+**Blocked on AWS write access (no write-capable IAM role exists yet):**
+- S3 upload for tracking data (if ever reinstated — trailers are the real source of truth now)
+- The PR-gate Lambda (checks for the Kiro tag on every commit in a PR)
+- Daily/weekly automated health and coverage checks
+- Jira/SonarQube webhook receivers, and the EventBridge rule for CodePipeline events
+- The DuckDB-over-S3 admin dashboard itself
+
+**Needs a human decision, not more code:**
+- Where this repo actually lives — personal GitHub account vs. a company-owned org (same question affects who can see the tracking data at all)
+- Redacting the AWS account ID in `docs/source-repo-decision.md` before any public push
+- Legal sign-off on what's tracked, before turning this on for real
+- Provisioning a real SonarQube host/token
+- Authorizing a real CodeStar Connections ARN for the GitHub↔CodePipeline link
+
+## 9. Testing philosophy
+
+The working rule on this project has been: verify against real files,
+real command output, and real logs — never trust a plausible-sounding
+claim, including ones this project's own tooling generated. That
+discipline caught real bugs a description-only approach would have
+missed:
+
+- **A fabricated credit number.** With no `sqlite3` CLI installed, an
+  early attempt to read `state.vscdb` fell back to `cat`-ing the raw
+  binary file and pulled `168.77` out of the garbled output — not a
+  real read, just noise that happened to look like a plausible number.
+  Caught by actually inspecting what command ran and what it returned,
+  not by the number looking wrong on its own.
+- **The `git rebase` episode-boundary bug.** `post-checkout`'s branch-
+  switch detection looked correct by reading the code — it was only
+  confirmed broken (and specifically broken by rebase, not just branch
+  switches) by actually running `git rebase` on a real branch and
+  checking `current-ticket.json`'s contents before and after, twice.
+- **The consent-in-every-hook claim.** Stated as done in an earlier
+  pass of this file's own history. Corrected only because a later
+  status-report task went and grepped all 5 `.githooks/` files for
+  real, rather than repeating the earlier claim — consent logic was
+  only ever in `pre-commit`.
+
+None of these were caught by re-reading a description of what the code
+was supposed to do. All three were caught by running the actual thing
+and looking at the actual output.
+
+---
+
+Full design in [`docs/runbook.md`](docs/runbook.md) and
+[`docs/architecture.png`](docs/architecture.png).
