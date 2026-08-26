@@ -157,7 +157,23 @@ elif { : < /dev/tty; } 2>/dev/null; then
   # them to click their profile icon and refresh their credits BEFORE
   # this commit reads state.vscdb, so this exact commit can benefit from
   # a fresh number instead of pre-commit reading whatever's cached.
-  read -p "Please click your profile icon to refresh your credits, then press Enter to continue: " _ < /dev/tty
+  #
+  # 5-minute timeout: a TTY existing doesn't mean someone's actually
+  # watching it — Kiro's autopilot mode can leave a terminal technically
+  # open with nobody there. Without a timeout, `read -p` blocks forever
+  # in that case, indistinguishable from CASE C's no-TTY fallback except
+  # that it hangs instead of degrading. 5 minutes is long enough for
+  # someone genuinely nearby to notice and respond, short enough not to
+  # seriously stall an autopilot run that's actually unattended. Logged
+  # distinctly from both "answered" (no log line at all) and "no TTY at
+  # all" (the CASE C branch below), so hook-health.log can tell all
+  # three apart.
+  if read -t 300 -p "Please click your profile icon to refresh your credits, then press Enter to continue (5 min timeout): " _ < /dev/tty; then
+    : # answered in time, continue normally
+  else
+    mkdir -p .kiro-tracking
+    echo "hook_status=pre-commit-refresh-prompt-timeout ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+  fi
 else
   # CASE C (no TTY at all, and not agent-marked — e.g. a fully headless
   # subprocess with nobody present): do NOT attempt to ask anything.

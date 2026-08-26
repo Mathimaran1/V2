@@ -861,6 +861,82 @@ a future person (or a future me).
       `aidlc-git-conventions.md` as an explicit documented exception,
       not left as something to re-decide each time.
 
+## Abandoned-terminal gap: interactive prompts could hang forever, fixed with a 5-minute timeout (2026-08-26)
+- [x] **Real gap, not hypothetical — a TTY existing was never proof
+      someone's actually there.** Both `pre-commit`'s profile-click
+      prompt and `post-commit`'s ticket-switch question gate on
+      `{ : < /dev/tty; } 2>/dev/null` — proven correct for telling
+      "a controlling terminal exists at all" apart from "no controlling
+      terminal exists" (see the earlier TTY-detection entries), but
+      that check says nothing about whether a human is actually
+      watching that terminal right now. Kiro's autopilot mode can leave
+      a real terminal technically attached and open while nobody's
+      there to answer — a plain `read -p` in that state blocks forever,
+      not the no-TTY case these hooks were built to avoid hanging on,
+      but a different, previously-unhandled way to hang anyway.
+      **Fixed:** both prompts now use `read -t 300` (5 minutes) instead
+      of a bare `read -p`. 5 minutes was chosen as long enough for
+      someone genuinely nearby to notice and respond, short enough not
+      to seriously stall an autopilot run that actually is unattended.
+      A timeout logs a status distinct from both a real answer (no log
+      line at all) and no TTY at all
+      (`...-refresh-prompt-skipped-no-tty` /
+      `...-switch-check-skipped-no-tty`):
+      `hook_status=pre-commit-refresh-prompt-timeout` and
+      `hook_status=post-commit-switch-check-timeout`, so all three
+      cases stay distinguishable in `hook-health.log`. A timed-out
+      switch question defaults to "not switching" — the same safe
+      default already used for an ambiguous reply, no new branching
+      needed there.
+      **Tested for real, both hooks, both paths:**
+      - **Answered within the timeout** (real 300s versions, via a
+        genuine pty): both prompts showed their new "(5 min timeout)"
+        text, were answered normally, commit succeeded, and
+        `hook-health.log`'s relevant entries were plain `hook_status=ok`
+        — no timeout line, confirming the answered path is unaffected.
+      - **Timed out** (temporary scratch copies with `-t 3` instead of
+        `-t 300`, swapped in for one test commit via the same real-pty-
+        with-no-input technique used for the original TTY tests, then
+        immediately restored to the real 300s versions — the real files
+        were never left with a shortened timeout): a real pty was
+        allocated, but nothing was ever typed into it. Both prompts
+        timed out on their own; the commit completed in a few seconds
+        with exit 0 (not hung), `current-ticket.json` stayed untouched
+        (correctly defaulted to no-switch), and both new distinct log
+        lines appeared with correct timestamps.
+
+## 2026-08-27 (reversed): "explicit commit instruction skips the question" removed
+- [x] **The 2026-08-26 decision above ("Decided: an explicit 'commit
+      now' answers the ask-first steering rules") has been reversed the
+      next day — kept as history, not deleted, since it's useful record
+      that this was tried and then undone, not silently forgotten.**
+      Both questions — the ticket-switch question (episode-boundary
+      CASE B) and the profile-click question (ask-to-click-gate CASE
+      B) — must now always be asked, every time, before/after an
+      agent-run commit, with no exception for how directly the user
+      phrases their request. "Commit it now" no longer skips either
+      question. **Reason:** a deliberate choice to prioritize
+      consistency over speed — the behavior shouldn't depend on how a
+      request happens to be phrased, even though the exception did save
+      real friction in the moment.
+      **Removed cleanly, not just marked deprecated:** both exception
+      paragraphs were deleted from `aidlc-git-conventions.md`, and both
+      CASE B sections were verified byte-identical to their pre-
+      exception original wording (diffed directly against the commit
+      before the exception was ever added), not just eyeballed as
+      "looks about right."
+      **Confirmed this was steering-doc-only, not code:** grepped
+      `.githooks/pre-commit` and `.githooks/post-commit` for any
+      reference to "explicit"/"direct instruction"/"commit now" — none
+      found. The exception was always a behavioral instruction to the
+      agent, exactly as it was originally documented ("Honest limit of
+      this mechanism: this is a behavioral instruction... not
+      code-level enforcement"), so there was no code to revert. CASE A
+      (terminal, always asks) and CASE C (no TTY, or the 5-minute
+      timeout above) are both unaffected — they were never related to
+      how the user phrased anything, only to whether a human is
+      actually reachable to answer at all.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`

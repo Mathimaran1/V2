@@ -27,8 +27,22 @@ else
   echo "hook_status=post-commit-switch-check-skipped-no-tty ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse HEAD)" >> .kiro-tracking/hook-health.log
 fi
 
+# 5-minute timeout: same reasoning as pre-commit's profile-click
+# prompt — a TTY existing doesn't mean someone's actually watching it
+# (Kiro's autopilot mode can leave a terminal technically open with
+# nobody there), so without a timeout this blocks forever, the same
+# hang the no-TTY branch above was built specifically to avoid. A
+# timed-out read leaves SWITCH_ANSWER empty, which the check below
+# already treats as "not switching" — the same safe default already
+# used for an ambiguous reply — so no separate handling is needed
+# there; this only adds the distinct log line, so a timeout is
+# distinguishable from both "answered" and "no TTY at all" in
+# hook-health.log.
 if [ "$HAS_TTY" = "1" ]; then
-  read -p "Working on a different ticket now? (y/n) " SWITCH_ANSWER < /dev/tty
+  if ! read -t 300 -p "Working on a different ticket now? (y/n) (5 min timeout) " SWITCH_ANSWER < /dev/tty; then
+    mkdir -p .kiro-tracking
+    echo "hook_status=post-commit-switch-check-timeout ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse HEAD)" >> .kiro-tracking/hook-health.log
+  fi
 fi
 
 # Jira ticket-existence validation — same reasoning and same closest
