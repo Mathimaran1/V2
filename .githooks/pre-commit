@@ -67,6 +67,54 @@ if [ -z "$TICKET_ID" ]; then
   exit 1
 fi
 
+# 2b. Ask-to-click gate — CASE A / CASE C of the three-way split
+# documented in aidlc-git-conventions.md (CASE B, the chat-based
+# counterpart, is a steering rule and lives entirely there — a hook
+# cannot detect "a human is present in a chat conversation" at all).
+#
+# BUG FOUND AND FIXED 2026-08-26: `/dev/tty` openability alone cannot
+# tell CASE A (human typing in a real terminal) apart from an agent
+# running `git commit` through its own tool-execution mechanism — both
+# can have a real TTY attached (agent tool-call shells are not
+# guaranteed to be TTY-less the way a bare subprocess is; confirmed
+# this actually happens). Result before this fix: an agent-run commit
+# incorrectly took the CASE A branch, and the terminal prompt got
+# dumped into the chat transcript as inert text — nobody was watching a
+# real terminal to answer it. The TTY check cannot fix this from the
+# hook's side alone; it needs the agent to self-identify explicitly,
+# which is what $KIRO_AGENT_COMMIT does below. See the steering rule in
+# aidlc-git-conventions.md: the agent asks in chat FIRST, waits for a
+# real reply, and only then runs `KIRO_AGENT_COMMIT=1 git commit ...` —
+# that env var is the one thing a hook genuinely can check, unlike
+# guessing from TTY presence.
+if [ -n "$KIRO_AGENT_COMMIT" ]; then
+  # Permission was already handled in chat before this commit was run —
+  # do NOT also prompt the terminal (there's likely no one watching it
+  # even when one is attached, per the bug above).
+  mkdir -p .kiro-tracking
+  echo "hook_status=pre-commit-refresh-confirmed-via-chat ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+elif { : < /dev/tty; } 2>/dev/null; then
+  # CASE A (TTY present, e.g. a human typing `git commit` directly): ask
+  # them to click their profile icon and refresh their credits BEFORE
+  # this commit reads state.vscdb, so this exact commit can benefit from
+  # a fresh number instead of pre-commit reading whatever's cached.
+  read -p "Please click your profile icon to refresh your credits, then press Enter to continue: " _ < /dev/tty
+else
+  # CASE C (no TTY at all, and not agent-marked — e.g. a fully headless
+  # subprocess with nobody present): do NOT attempt to ask anything.
+  # Same reasoning as post-commit's no-TTY ticket-switch fallback (see
+  # CASE B there) — asking into nothing risks a hang, and `[ -t 0 ]` was
+  # already tested and found to be the wrong signal (reads false even
+  # for a genuine human-typed commit). No separate forced-low branch is
+  # needed for confidence here: credit_confidence below already reads
+  # state.vscdb's own internal timestamp as direct evidence, not a
+  # guess — if nobody actually clicked, the cache stays stale and
+  # confidence correctly comes out low on its own (verified by testing —
+  # see TODO.md).
+  mkdir -p .kiro-tracking
+  echo "hook_status=pre-commit-refresh-prompt-skipped-no-tty ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+fi
+
 # 3. Get credit numbers from the real local sources (no kiro-session-info —
 #    that command doesn't exist; confirmed by inspecting the actual files):
 #    - session id: most recently modified ~/.kiro/sessions/*/*/session.json
