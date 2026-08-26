@@ -2,7 +2,7 @@
   "version": "v1",
   "hooks": [
     {
-      "name": "Ask for ticket if missing (CASE A + CASE C)",
+      "name": "Ask for ticket if missing (CASE A + CASE C only — see post-commit for CASE B)",
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "agent",

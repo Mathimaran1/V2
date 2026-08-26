@@ -79,19 +79,25 @@ reliability guarantees:
   tickets — confirmed by reproducing it twice on a real branch.
 
 - **CASE B — post-commit direct question. The primary, reliable
-  mechanism.** `.githooks/post-commit` asks, right after every
-  commit: *"Working on a different ticket now? (y/n)."* "y" generates
-  a fresh baseline and episode; anything else leaves the file
-  untouched. **Code-enforced** for a human typing in a real terminal.
-  For an agent running the commit itself with no human present, this
-  question can't be answered (nobody's watching the terminal), so it's
-  skipped and logged to `.kiro-tracking/hook-health.log` instead of
-  hanging — deliberately not silent.
+  mechanism.** Lives entirely in `.githooks/post-commit` — **not** in
+  the AI hook, despite CASE B being named alongside A and C. This split
+  caused real confusion once, which is why the AI hook's own name field
+  now spells it out explicitly:
+  `"Ask for ticket if missing (CASE A + CASE C only — see post-commit
+  for CASE B)"`. `post-commit` asks, right after every commit:
+  *"Working on a different ticket now? (y/n)."* "y" generates a fresh
+  baseline and episode; anything else leaves the file untouched.
+  **Code-enforced** for a human typing in a real terminal. For an agent
+  running the commit itself with no human present, this question can't
+  be answered (nobody's watching the terminal), so it's skipped and
+  logged to `.kiro-tracking/hook-health.log` instead of hanging —
+  deliberately not silent.
 
 - **CASE C — AI-detected mid-conversation switch. Secondary, best-
-  effort.** The `UserPromptSubmit` hook
-  (`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`) also watches
-  conversation for signs the dev is now working on a different
+  effort.** Lives in the same `UserPromptSubmit` hook as CASE A
+  (`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`) — the file's own
+  name now says "CASE A + CASE C only" for exactly this reason. It
+  watches conversation for signs the dev is now working on a different
   specific ticket, and asks to confirm before anything's committed.
   **Be honest about this one:** it depends on Kiro's agent correctly
   recognizing a switch from natural language — there is no code-level
@@ -111,6 +117,28 @@ dependent; see `.kiro/steering/aidlc-git-conventions.md`'s "Before
 committing" section for the full detail, since it's really a variant
 of the same underlying problem (a hook can prompt a terminal, but has
 no way to reach or verify a human in a chat conversation).
+
+**Both interactive prompts (`post-commit`'s switch question and
+`pre-commit`'s profile-click question) always fire — no exceptions for
+how the request is phrased.** A brief exception existed for one day
+(2026-08-26 to 2026-08-27): an explicit, direct "commit this now"
+instruction from the user was allowed to skip the question. It was
+tried, then reversed — prioritizing consistency over the small amount
+of friction it saved. Kept as design history in `TODO.md`, not current
+behavior.
+
+**Both prompts also have a 5-minute timeout**, added after finding a
+real gap: the TTY check these prompts gate on only proves a terminal
+*exists*, not that anyone's actually watching it — Kiro's autopilot
+mode can leave one technically open with nobody there, and a bare
+`read -p` would then block forever. `read -t 300` now caps both; a
+timeout logs a status distinct from a real answer and from no TTY at
+all (`pre-commit-refresh-prompt-timeout` /
+`post-commit-switch-check-timeout`), and defaults to "not switching" /
+proceeds with the commit — the same safe default already used
+elsewhere for an ambiguous reply. Tested for real, both hooks, both
+paths (answered in time; timed out via a real allocated terminal with
+nothing ever typed into it) — neither hangs.
 
 ## 4. How credit tracking works
 
@@ -164,19 +192,30 @@ once a genuinely fresh click was behind it; a baseline backdated 20
 minutes with a real non-zero delta (both old-logic signals said "high")
 came back `low` once the cache itself was confirmed stale.
 
-**Max-per-episode-then-sum, not a direct sum.** `Kiro-Credits` is
-cumulative *since the episode's own baseline*, not incremental per
-commit — each value already contains everything since that baseline.
-Summing raw values across commits in the same episode would
-double-count everything after the first commit. The correct
-aggregation (`scripts/calculate-pr-credits.sh`, and the intended
-DuckDB dashboard query) takes the **max** `Kiro-Credits` per
-`(ticket_id, episode_id)` pair, then **sums** those per-episode maxes
-per ticket — because a *new* episode really does start a fresh,
-independent baseline that shouldn't be netted against the old one.
-Worked example from real testing: two episodes on one ticket, one
-maxing at `5.0`, the other at `max(0.8, 1.2) = 1.2` → total `6.2`, not
-`5.0 + 0.8 + 1.2 = 7.0`.
+**Max-per-episode-then-sum, not a direct sum — confirmed against the
+actual current code, not assumed.** `pre-commit` only ever *reads*
+`credits_at_ticket_start` (`.githooks/pre-commit`, the
+`CREDITS_START=...jq -r '.credits_at_ticket_start'` line) — it never
+writes it. The baseline is written in exactly two places: the AI hook's
+CASE A1/C1 (episode start) and `post-commit`'s CASE B switch (new
+episode). **A normal commit that doesn't trigger a new episode never
+resets the baseline.** So `Kiro-Credits` stays cumulative *since the
+episode's own baseline*, not incremental per commit, and each value
+already contains everything since that baseline — summing raw values
+across commits in the same episode would double-count everything after
+the first commit. The correct aggregation
+(`scripts/calculate-pr-credits.sh`, confirmed by reading its actual
+`awk` logic — still `max[key] = ...; total[ticket[k]] += max[k]`, keyed
+on `ticket|episode`, unchanged all session) takes the **max**
+`Kiro-Credits` per `(ticket_id, episode_id)` pair, then **sums** those
+per-episode maxes per ticket. Worked example from real testing: two
+episodes on one ticket, one maxing at `5.0`, the other at
+`max(0.8, 1.2) = 1.2` → total `6.2`, not `5.0 + 0.8 + 1.2 = 7.0`.
+(Credit *reads* do happen fresh on every commit — that's the
+"per-commit" in the decided-against-a-watcher entry in §7 — but that's
+a different thing from the *baseline* resetting per commit, which
+never happens outside an episode boundary. Worth spelling out plainly
+since those two are easy to conflate.)
 
 **Jira ticket-existence validation.** A typed or branch-derived ticket
 ID gets checked against Jira before being trusted, at every point one
@@ -190,10 +229,24 @@ configured `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN` instead). This
 is *existence*-checking only — see §7 for why assignment-checking is
 explicitly out of scope. If Jira can't be reached, or no credential is
 configured, validation degrades gracefully (warns, doesn't block) —
-only a confirmed "doesn't exist" rejects an ID. **Tested and working at
-all three points**, including live through a real Kiro chat session for
-the MCP path (a real query against a nonexistent ticket ID was
-correctly rejected).
+only a confirmed "doesn't exist" rejects an ID.
+
+**Tested and working at all three points.** The two plain-git-hook
+paths were tested against a local mock Jira server (no real credential
+exists anywhere in this environment — confirmed by checking env vars,
+config files, and the OS keyring):
+
+| Entry point | Valid | Fake | Unreachable |
+|---|---|---|---|
+| `pre-commit`, branch-name | accepted silently | rejected, falls back to manual entry | accepted, degraded gracefully, `http_code=000` logged |
+| `pre-commit`, manual-entry | accepted silently | **commit blocked** (exit 1) | accepted, degraded gracefully, logged |
+| `post-commit`, switch | switch succeeds, new baseline/episode | switch rejected, `current-ticket.json` byte-identical to before | switch proceeds anyway, degraded gracefully, logged |
+
+The AI hook's MCP path was confirmed **live**, through a real Kiro chat
+session, twice: once with `ANG-999999`, where Kiro called
+`searchJiraIssuesUsingJql`/`getJiraIssue` for real and correctly told
+the dev it doesn't appear to be a real ticket rather than saving it;
+and again after the `cloudId` fix below, with `ANG-888888`.
 
 **Known quirk, found, fixed, and re-verified.** On the first live MCP
 test, Kiro's *first* attempt guessed a `cloudId` of
@@ -264,7 +317,7 @@ each):
 .kiro/
   steering/aidlc-git-conventions.md   # rules Kiro always follows
   settings/mcp.json                   # Jira MCP connection (SonarQube isn't MCP)
-  hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C (§3)
+  hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C only — CASE B is in post-commit (§3)
   hooks/aidlc-bootstrap-git-hooks.json        # auto-sets up .githooks/ (unconfirmed trigger — §5)
   current-ticket.json                 # local, gitignored — current ticket + starting credits
 .githooks/
@@ -300,12 +353,26 @@ item below was confirmed by actually testing it, not inferred.
 | `--no-verify` / unset `core.hooksPath` bypass tracking entirely | **Open — standard git escape hatches** | Nothing local can prevent these; only server-side enforcement (the not-yet-built PR-gate Lambda, §2) could catch a commit missing its Kiro tag after the fact. |
 | Consent lived only in `pre-commit`, not every hook | **Fixed 2026-08-26** | A status report caught the "baked into every hook" claim was never true — confirmed by grepping all 5 hooks. `post-checkout` and `pre-push` now carry a lightweight marker-only check (logs, never blocks). Does **not** close the `--no-verify`/cherry-pick gap above — those still skip `pre-commit` (and thus consent) entirely. |
 | Fake/unvalidated ticket IDs accepted silently | **Fixed 2026-08-26** | Existence-checking built and tested at all three points a ticket ID gets set (§4) — 9 mechanical scenarios plus a live Kiro chat session confirming the MCP path for real. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass this like every other pre-commit-based check. |
-| Squash-merge loses all per-commit trailers | **Open — structural limit of trailer-based tracking** | Confirmed directly: 3 commits with distinct trailers, squashed, and the result has none of them. No fix proposed — this is a real cost of storing tracking data in commit messages instead of an external system. |
+| Squash-merge loses all per-commit trailers | **Open — structural limit of trailer-based tracking** | Confirmed directly: 3 commits with distinct trailers, squashed with a local `git merge --squash`, and the result has none of them. **Not yet confirmed against real AWS CodeCommit specifically** — the test used local git, and CodeCommit's own PR-merge behavior (once that pipeline stage exists at all — see §8) hasn't been checked for whether it squashes the same way. No fix proposed either way — this is a real cost of storing tracking data in commit messages instead of an external system. |
+| Low-confidence credit numbers counted equally in a ticket's total | **Open — `calculate-pr-credits.sh` never reads `Kiro-Confidence` at all** | Confirmed by reading the actual aggregation logic: it maxes and sums `Kiro-Credits` per `(ticket, episode)` with zero reference to the confidence field anywhere in the script. A stale, low-confidence number sits in the max pool with equal weight to a genuinely fresh one. No fix proposed. |
 | `hook-health.log` has no integrity protection | **Open — and not git-tracked at all** | Deliberately gitignored (it's local diagnostic noise, not the tracking record). Anyone can edit or delete it with zero trace, and it was never shared to begin with. |
 | The credit number's own source is a locally-writable SQLite cache | **Open — structural, root of the trust model** | `state.vscdb` has no signature, no server round-trip check. Whoever controls the laptop controls the number every trailer, delta, and dashboard total ultimately traces back to. |
 | SonarQube quality gate | **Disabled with a loud warning, deliberately** | No real host/token configured yet (`YOUR_PROJECT` / `your-sonarqube-host` placeholders). `pre-push` prints a triple-⚠️ warning on every push while this is true rather than silently skipping. |
 | DuckDB dashboard query still assumes S3 JSON | **Open, flagged not fixed** | The real source of truth moved to commit trailers 2026-08-25; the dashboard design in `docs/runbook.md` hasn't been updated to match — it would need to read commit messages via git/GitHub API instead of (or alongside) S3. |
 | `calculate-pr-credits.sh --repo/--pr` path | **Built, not fully tested** | Verified it fails cleanly against a nonexistent repo/PR; this repo has no real remote PR to test the success path against yet. The `--range` path (local git history) is fully tested. |
+
+**On tamper-resistance, stated plainly:** local git hooks cannot be
+made fully tamper-proof — a developer owns their own machine, and every
+row above that starts with "standard git behavior" or "structural" is
+really a variation on that one fact. The planned mitigation is not
+prevention, it's *detection after the fact*: reconciling tracked
+credits against Kiro's own official daily per-user usage report
+(written to S3 by Kiro itself, not by anything in this repo). That
+report only exists once *Enterprise settings* are turned on — which is
+deliberately the *last* stage in this project's build order, after the
+core workflow already works end to end (see §2) — so this reconciliation
+is parked, not built, and shouldn't be revisited before that stage is
+actually reached.
 
 ## 7. Decisions made, and why
 
@@ -351,6 +418,16 @@ item below was confirmed by actually testing it, not inferred.
   agent ask in chat first, wait for a real reply, then set an env var
   the hook can actually check — a real signal, unlike guessing from TTY
   presence.
+- **"Commit now" skipping the ask-first questions — tried, then
+  reversed the next day.** Briefly decided that an explicit, direct
+  commit instruction counted as already answering the profile-click and
+  ticket-switch questions (2026-08-26), then reversed (2026-08-27) in
+  favor of always asking regardless of phrasing — prioritizing
+  consistency over the friction it saved. See §3.
+- **5-minute timeout on both interactive prompts, not an indefinite
+  wait.** A TTY existing was never proof someone's watching it — an
+  abandoned terminal in Kiro's autopilot mode could hang either prompt
+  forever otherwise. See §3 for the fix and its real test results.
 
 ## 8. What's still open
 
