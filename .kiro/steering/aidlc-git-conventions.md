@@ -202,6 +202,13 @@ that episode's own baseline. See `docs/runbook.md` and
 ## Workflow
 - Always plan first (requirements → design → steps) before coding.
 - Use the safer "ask before doing" mode on production branches.
+- Two things this project deliberately does **not** do — scope
+  decisions, not unfinished work: checking who a Jira ticket is
+  *assigned* to (only existence-checking is in scope, once built), and
+  any cron/daemon-style background credit-sync watcher (per-commit
+  reads plus `credit_confidence` flagging is the accepted trade-off
+  instead). See `TODO.md`'s 2026-08-26 "decisions made in conversation"
+  entry for the full reasoning behind both.
 
 ## Commit hygiene
 - Never commit passwords, keys, or .env files.

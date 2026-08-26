@@ -692,6 +692,34 @@ been made yet. Not bugs — just don't assume any of these are "done."
       is not a complete guarantee against every unattended-TTY
       scenario.
 
+## Two decisions made in conversation, now recorded here for real (2026-08-26)
+These were discussed and settled earlier, but never actually written
+into the repo — a status report surfaced that gap directly. Recording
+both explicitly now so neither reads as an overlooked open question to
+a future person (or a future me).
+
+- [x] **Jira ticket-assignment checking — decided against.** We will
+      validate that a ticket ID *exists* in Jira (once that check gets
+      built — see the "fake/unvalidated ticket IDs" gap elsewhere in
+      this file, still open). We will **not** check who it's assigned
+      to. Reason: legitimate cases — pairing, mid-work reassignment,
+      email-format mismatches between git identity and Jira account —
+      would all produce false warnings for completely normal work.
+      Existence-checking and assignment-checking are two different
+      features; only the first is in scope.
+- [x] **Background credit-sync watcher (cron/daemon polling
+      `state.vscdb`) — decided against, in favor of the current
+      per-commit delta approach.** Reason: `state.vscdb`'s cache only
+      updates via Kiro's own internal AWS auth flow (confirmed earlier
+      by correlating cache jumps against `CodeWhispererRuntimeClient`
+      log lines — see the "Found by actually testing" entry above) —
+      replicating that safely inside a git hook or a standalone
+      watcher would mean reverse-engineering undocumented internals and
+      adding a hard network dependency to something that currently has
+      neither. The per-commit read, plus `credit_confidence` flagging
+      when the cache might be stale, is the accepted trade-off — not an
+      oversight.
+
 ## Known gaps, already understood (not urgent)
 - `kiro-session-info` never existed — replaced with a real SQLite read
   (`~/.config/Kiro/User/globalStorage/state.vscdb`). See `pre-commit`
