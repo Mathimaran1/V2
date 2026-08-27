@@ -238,24 +238,57 @@ notwithstanding (it proved the *logic* worked against a stand-in, not
 that real validation was happening — a mismatch this row itself missed
 until it was checked live).
 
-**Current design (2026-08-27, settled after three same-day
-corrections):** only the chat-based MCP path actually validates
-anything, and Kiro chat is now the ONLY place a ticket ever gets set,
-full stop. `post-commit`'s switch prompt still types a value at the
-terminal, but no longer trusts it — it defers to Kiro chat's real
-connection instead (`.kiro/pending-ticket-check.json` — see §6/§7).
-Branch-name ticket guessing was removed entirely, not just deferred —
-one fewer code path that could produce a ticket nobody actually
-validated. `pre-commit`'s own terminal prompt was removed too, for a
-different but related reason: live testing found it produced a
-confusing double-ask (Kiro chat's CASE A already asks the same
-question) and hung outright in a non-interactive context (an agent's
-tool execution) with nothing able to answer it — so it no longer asks
-anything at all, just tracks the commit as `none` and flags that a
-ticket is owed. `SOURCE` in the tracking data is now only ever
-`kiro_session` (came from `current-ticket.json`, chat-validated) or
-`unset` (nothing set yet, deferred to chat) — neither `branch_name` nor
-`manual_entry` are possible values anywhere in this system anymore.
+**Current design (2026-08-27, settled after five same-day corrections
+— the last two a full policy reversal followed by a course-correction
+back to a middle ground, neither one a bug fix):** only the chat-based
+MCP path actually validates a real ticket ID, and Kiro chat is now the
+ONLY place a ticket (or an explicit "none") ever gets set, full stop.
+`post-commit`'s switch prompt still types a value at the terminal, but
+a real ticket ID typed there is never trusted directly — it defers to
+Kiro chat's real connection instead (`.kiro/pending-ticket-check.json`
+— see §6/§7). Branch-name ticket guessing was removed entirely, not
+just deferred — one fewer code path that could produce a ticket nobody
+actually validated.
+
+**`pre-commit`'s own terminal prompt, and what "no ticket" means, went
+through three changes in one day, in a genuine zig-zag — worth being
+precise about which is current, not just the most recent.**
+1. First it was removed (double-ask problem, hung non-interactively)
+   in favor of silently tracking an empty ticket as `none` and
+   deferring — **too permissive**: no active choice was ever made,
+   `none` just happened by default.
+2. Then that was reversed: **no ticket blocked the commit outright**
+   (`exit 1`), full stop, and `none` was removed as a concept
+   entirely, with no way to explicitly record ticket-less work at
+   all — **too strict**: a quick experiment or config tweak with
+   genuinely no matching ticket couldn't be committed under any
+   label, ever.
+3. **The middle ground, and the design that's actually current:**
+   `pre-commit` still blocks (`exit 1`, unchanged code) when
+   `current-ticket.json` has never had anything set — that part of
+   step 2 stayed. But `none` came back as a legitimate, explicit
+   value: Kiro chat's CASE A now offers *"a real ticket ID, or
+   explicitly 'none' for work with no ticket"* as the question, and
+   whichever one the user actually picks gets written with a real
+   credit baseline and episode_id — `none` is treated exactly like a
+   real ticket once chosen, not degraded to `Kiro-Episode: none` /
+   `Kiro-Credits: n/a` the way step 1's silent default was.
+   `post-commit`'s switch prompt restores `(or 'none')` the same way,
+   with an explicit confirmation message, not a silent skip. The
+   `pre-commit` block itself needed **zero code changes** for this —
+   once `none` is chosen, `ticket_id` is the non-empty string `"none"`,
+   so the empty-check simply never fires for it; it only fires when
+   nothing has been chosen at all.
+
+`SOURCE` in the tracking data is `kiro_session` whenever anything —
+real ticket or explicit `none` — has been set; `branch_name`,
+`manual_entry`, and `unset` were the only other values across this
+whole session and all three are permanently gone. The
+`.kiro/pending-ticket-check.json` deferral flow is unaffected by any of
+this — it only ever handles a real typed ticket ID awaiting Jira
+validation; `none` never enters that flow at all, in either direction,
+since it needs no validation and is written immediately wherever it's
+chosen.
 
 The AI hook's MCP path was confirmed **live**, through a real Kiro chat
 session, twice: once with `ANG-999999`, where Kiro called
@@ -333,25 +366,30 @@ each):
   steering/aidlc-git-conventions.md   # rules Kiro always follows
   settings/mcp.json                   # Jira MCP connection (SonarQube isn't MCP)
   hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C, plus a PRIORITY CHECK that
-                                               # validates a pending ticket (typed via
-                                               # post-commit's switch prompt) or just clears
-                                               # a "ticket owed" flag (pre-commit) first
-                                               # (2026-08-27, §6) — CASE B is in post-commit (§3)
+                                               # validates a pending REAL ticket typed via
+                                               # post-commit's switch prompt (2026-08-27,
+                                               # §6) — "none" is restored as an explicit,
+                                               # actively-chosen answer in CASE A1, never a
+                                               # silent default (§7) — CASE B is in
+                                               # post-commit (§3)
   hooks/aidlc-bootstrap-git-hooks.json        # auto-sets up .githooks/ (unconfirmed trigger — §5)
-  current-ticket.json                 # local, gitignored — current ticket + starting credits
-  pending-ticket-check.json           # local, gitignored — either a terminal-typed ticket
-                                       # (from post-commit) awaiting real Jira validation via
-                                       # Kiro chat, or a no-ticket-set flag (from pre-commit,
-                                       # nothing typed) (2026-08-27, §6)
+  current-ticket.json                 # local, gitignored — current ticket + starting credits;
+                                       # ticket_id may be a real ID or the explicit string
+                                       # "none" — both written the same way, with a real
+                                       # baseline/episode (§7)
+  pending-ticket-check.json           # local, gitignored — a REAL typed ticket (from
+                                       # post-commit's switch prompt) awaiting Jira
+                                       # validation via Kiro chat — "none" never enters
+                                       # this flow, it's written immediately instead (§7)
 .githooks/
   post-checkout   # CASE A of episode boundaries (§3); also the rebase bug (§6)
-  pre-commit      # ticket resolution + credit read + trailer handoff — no longer asks
-                  # anything at the terminal at all (2026-08-27, §6/§7): an empty
-                  # current-ticket.json is tracked as "none" immediately and deferred
-                  # to Kiro chat, same as branch-name ticket guessing (removed entirely,
-                  # not just deferred, same day)
-  post-commit     # CASE B of episode boundaries (§3); ticket-switches are deferred to Kiro
-                  # chat the same way (2026-08-27, §6)
+  pre-commit      # ticket resolution + credit read + trailer handoff — BLOCKS the commit
+                  # outright (exit 1) only when NOTHING has ever been chosen at all
+                  # (unchanged code since the 2026-08-27 reversal, §7); once a real ticket
+                  # or an explicit "none" is chosen, this never fires for it
+  post-commit     # CASE B of episode boundaries (§3); ticket-switches defer a REAL typed
+                  # value to Kiro chat for validation (§6); "none" is restored as an
+                  # explicit, confirmed switch target, handled immediately (2026-08-27, §7)
   pre-push        # SonarQube gate — disabled with a warning (§6)
   commit-msg      # stamps all six Kiro-* trailers onto the commit message
 .kiro-tracking/    # gitignored — one debug-convenience JSON per ticket, overwritten
@@ -382,7 +420,7 @@ item below was confirmed by actually testing it, not inferred.
 | `git cherry-pick` skips every hook | **Open — standard git behavior, cannot be fixed locally** | Confirmed: no gitleaks banner, `hook-health.log` untouched, trailers byte-identical to the original rather than regenerated. A cherry-picked commit is not secret-scanned. |
 | `--no-verify` / unset `core.hooksPath` bypass tracking entirely | **Open — standard git escape hatches** | Nothing local can prevent these; only server-side enforcement (the not-yet-built PR-gate Lambda, §2) could catch a commit missing its Kiro tag after the fact. |
 | Consent lived only in `pre-commit`, not every hook | **Fixed 2026-08-26** | A status report caught the "baked into every hook" claim was never true — confirmed by grepping all 5 hooks. `post-checkout` and `pre-push` now carry a lightweight marker-only check (logs, never blocks). Does **not** close the `--no-verify`/cherry-pick gap above — those still skip `pre-commit` (and thus consent) entirely. |
-| Fake/unvalidated ticket IDs accepted silently | **Partially fixed 2026-08-26, fully closed across all 4 entry points 2026-08-27** | The 2026-08-26 fix validated the CASE A/C chat-based path (Kiro asking in chat) against live `atlassian-rovo` MCP — that part holds up. But `pre-commit`'s manual-entry fallback, `pre-commit`'s branch-name resolution, and `post-commit`'s ticket-switch prompt also called a `validate_jira_ticket()` that hits Jira's REST API directly — and this row's original "9 mechanical scenarios" claim didn't catch that `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN` are unset anywhere in this repo, so that function always took its "no credential" branch and accepted anything unvalidated. Confirmed live on 2026-08-27: a typed ticket (`ZZZZ-99999`) was accepted at the switch prompt exactly like a real one. **Fixed the same day, all three remaining entry points**, without a second Jira credential: each one now defers to Kiro chat's already-working MCP connection instead of pretending to validate locally — the typed/branch-derived ticket is written to `.kiro/pending-ticket-check.json`, the commit is tracked as `none` (or the switch left un-applied), and Kiro's ask-ticket hook validates it for real on the user's next chat message. `validate_jira_ticket()` itself — never able to validate anything in practice — was deleted from both hooks rather than left as dead code. Trade-off, stated plainly: a terminal-typed or branch-derived ticket isn't corrected until the next chat message, not instantly, and only the most recent pending write survives if several commits happen before that next message. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass all of this like every other pre-commit-based check. **Still not independently verified:** the chat-side half (Kiro actually reading the pending file and validating via live MCP) — logically consistent with the already-proven CASE A1/C1 pattern, but needs a real Kiro session to exercise, which this fix's own testing couldn't reach; the git-hook side (writing the pending file, refusing to trust an unvalidated ID, `none` correctly unaffected) was tested for real across all three entry points, real and fake tickets each. **Superseded later the same day, twice more:** branch-name resolution described here as "deferred" was removed outright shortly after, and then `pre-commit`'s own terminal prompt — the thing that made manual-entry deferral possible in the first place — was found through live testing to be a confusing double-ask that hung in non-interactive contexts, and removed too. Neither `branch_name` nor `manual_entry` are possible `SOURCE` values anymore; Kiro chat is now the only place a ticket ever gets set. See §7's two follow-up decision entries and §8's layout note. |
+| Fake/unvalidated ticket IDs accepted silently | **Partially fixed 2026-08-26, fully closed across all 4 entry points 2026-08-27** | The 2026-08-26 fix validated the CASE A/C chat-based path (Kiro asking in chat) against live `atlassian-rovo` MCP — that part holds up. But `pre-commit`'s manual-entry fallback, `pre-commit`'s branch-name resolution, and `post-commit`'s ticket-switch prompt also called a `validate_jira_ticket()` that hits Jira's REST API directly — and this row's original "9 mechanical scenarios" claim didn't catch that `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN` are unset anywhere in this repo, so that function always took its "no credential" branch and accepted anything unvalidated. Confirmed live on 2026-08-27: a typed ticket (`ZZZZ-99999`) was accepted at the switch prompt exactly like a real one. **Fixed the same day, all three remaining entry points**, without a second Jira credential: each one now defers to Kiro chat's already-working MCP connection instead of pretending to validate locally — the typed/branch-derived ticket is written to `.kiro/pending-ticket-check.json`, the commit is tracked as `none` (or the switch left un-applied), and Kiro's ask-ticket hook validates it for real on the user's next chat message. `validate_jira_ticket()` itself — never able to validate anything in practice — was deleted from both hooks rather than left as dead code. Trade-off, stated plainly: a terminal-typed or branch-derived ticket isn't corrected until the next chat message, not instantly, and only the most recent pending write survives if several commits happen before that next message. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass all of this like every other pre-commit-based check. **Still not independently verified:** the chat-side half (Kiro actually reading the pending file and validating via live MCP) — logically consistent with the already-proven CASE A1/C1 pattern, but needs a real Kiro session to exercise, which this fix's own testing couldn't reach; the git-hook side (writing the pending file, refusing to trust an unvalidated ID, `none` correctly unaffected) was tested for real across all three entry points, real and fake tickets each. **Superseded later the same day, four times over:** branch-name resolution described here as "deferred" was removed outright shortly after; `pre-commit`'s own terminal prompt — the thing that made manual-entry deferral possible in the first place — was found through live testing to be a confusing double-ask that hung in non-interactive contexts, and removed too; then, in a full policy reversal rather than a bug fix, "the commit is tracked as `none`" (this row's own phrase) stopped being true at all — an empty ticket blocked the commit outright, no `none` bucket at all; and finally that reversal was itself course-corrected to a middle ground — `none` is back, but only as an explicit, actively-chosen value (real baseline/episode, written the same way a real ticket is), never a silent default, and a genuinely never-answered ticket still blocks. Neither `branch_name`, `manual_entry`, nor `unset` are possible `SOURCE` values anymore; Kiro chat is now the only place a ticket (real or explicitly `none`) ever gets set. See §7's four follow-up decision entries and §8's layout note. |
 | Squash-merge loses all per-commit trailers | **Open — structural limit of trailer-based tracking** | Confirmed directly: 3 commits with distinct trailers, squashed with a local `git merge --squash`, and the result has none of them. **Not yet confirmed against real AWS CodeCommit specifically** — the test used local git, and CodeCommit's own PR-merge behavior (once that pipeline stage exists at all — see §8) hasn't been checked for whether it squashes the same way. No fix proposed either way — this is a real cost of storing tracking data in commit messages instead of an external system. |
 | Low-confidence credit numbers counted equally in a ticket's total | **Open — `calculate-pr-credits.sh` never reads `Kiro-Confidence` at all** | Confirmed by reading the actual aggregation logic: it maxes and sums `Kiro-Credits` per `(ticket, episode)` with zero reference to the confidence field anywhere in the script. A stale, low-confidence number sits in the max pool with equal weight to a genuinely fresh one. No fix proposed. |
 | `hook-health.log` has no integrity protection | **Open — and not git-tracked at all** | Deliberately gitignored (it's local diagnostic noise, not the tracking record). Anyone can edit or delete it with zero trace, and it was never shared to begin with. |
@@ -590,6 +628,115 @@ actually reached.
   and a `null`-over-`null` overwrite (two genuinely ticketless commits
   in a row) still updates the timestamp as before — the guard is
   narrowly scoped to "never let null erase a real value," nothing more.
+- **"No ticket = track as `none` and let the commit through" — reversed
+  entirely (2026-08-27, same day it was built).** Every entry directly
+  above this one was some flavor of "make the no-ticket case honest and
+  non-blocking" — track it as `none`, defer validation, never block the
+  commit. This is the opposite decision: **no commit is allowed without
+  a real, validated Jira ticket, full stop, no exceptions.** `none` is
+  removed as a concept, not just discouraged — it's no longer offered
+  as an answer to CASE A's question, no longer accepted as a switch
+  target in CASE B's question, and no longer something `pre-commit`
+  will track and move past. An empty `current-ticket.json` now blocks
+  the commit outright (`exit 1`) with a clear message pointing at Kiro
+  chat. `SOURCE` is always `kiro_session` now; `unset` (along with
+  `branch_name` and `manual_entry` before it) is gone.
+  **The trade-off, stated plainly, not glossed over:** a quick
+  experiment, a config tweak, or genuinely exploratory work with no
+  matching Jira ticket can no longer be committed at all — not tracked
+  loosely, not deferred, not committed under `none` — until a real
+  ticket exists for it first. That's a real cost for real convenience
+  this project used to offer; it's accepted here as the deliberate
+  price of "no exceptions," not an oversight.
+  **What's unchanged:** a ticket that's already set and validated keeps
+  working normally for every subsequent commit, and the
+  pending-validation flow for a typed/switched ticket (deferred to Kiro
+  chat's real `atlassian-rovo` MCP connection) is untouched — this
+  reversal removes the *no-ticket* escape hatch specifically, not
+  ticket validation itself.
+  **Tested for real, 4 scenarios plus a regression check, isolated
+  repo, real pty:**
+  1. **Empty ticket, attempt to commit:** blocked with exit `1` and the
+     exact requested message; no commit was created.
+  2. **Post-commit's switch flow, typing `none` as the new ticket:**
+     no longer specially accepted or specially switched-to — `none` is
+     now just an ordinary unvalidated string, written to
+     `.kiro/pending-ticket-check.json` for Kiro chat to check against
+     Jira exactly like any other typed value (where it would fail
+     validation, being a real ticket ID). `current-ticket.json` stayed
+     on the old ticket, unchanged.
+  3. **A real, already-validated ticket set, then commit:** succeeded
+     normally, correct trailers, completely unaffected by the reversal.
+  4. **Post-commit's switch flow, typing a real-looking ticket
+     (`ANG-151`):** still defers to the pending-validation flow exactly
+     as before — regression-free.
+  Plus a regression check: declining the switch with a blank answer
+  still works exactly as before (`current-ticket.json` untouched, no
+  pending file written) — unaffected, since declining was never the
+  same thing as setting a ticket to `none`.
+  **What could not be tested directly:** whether Kiro chat, mid-
+  conversation, actually refuses "none" as an answer to its own
+  question and re-asks — this is chat-side/behavioral, the same
+  limitation already stated for the pending-check MCP validation itself
+  (§8). Traced through the updated hook logic instead: "none" doesn't
+  match the ticket-ID regex CASE A1 checks for, so it's no longer
+  recognized as an answer at all and the question is effectively
+  re-asked — consistent with the intended behavior, but not the same as
+  having watched it happen live.
+- **The full reversal directly above was itself course-corrected the
+  same day, to a middle ground — not a third flip-flop for its own
+  sake, but a real design gap in the reversal: "no exceptions" also
+  meant no way to explicitly and honestly record genuinely ticket-less
+  work.** The final design: something must always be an ACTIVE choice
+  before a commit can proceed — a real ticket, or the explicit word
+  "none" — but never a silent default in either direction. Concretely:
+  - `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`'s CASE A1
+    recognizes `'none'` again, alongside the ticket-ID regex, as a
+    valid answer — skipping Jira validation for it specifically (it
+    makes no claim about a real ticket), but writing a real credit
+    baseline and `episode_id` for it exactly like a validated real
+    ticket, not a degraded stand-in. CASE A2's question was reworded to
+    offer it explicitly: *"a real ticket ID, or explicitly 'none' for
+    work with no ticket."*
+  - `.githooks/post-commit`'s switch flow restores the `elif
+    [ "$NEW_TICKET" = "none" ]` branch — same real-baseline-write
+    pattern, plus an explicit confirmation message ("Tracked explicitly
+    as no-ticket work, not a silent default") so the choice is visibly
+    deliberate, not silent.
+  - `.githooks/pre-commit` needed **zero code changes** — its
+    empty-check block (built during the full-reversal phase) already
+    does exactly the right thing once `none` is a real, saved value:
+    `ticket_id` becomes the non-empty string `"none"`, so the block
+    that blocks on emptiness simply never fires for it. It only fires
+    when nothing has ever been chosen — exactly the boundary this
+    correction needed.
+  **Tested for real, 4 scenarios, isolated repo, real pty:**
+  1. **Regression — empty ticket, attempt to commit:** still blocked,
+     `exit 1`, same message as the full-reversal phase — confirming the
+     stricter half of the policy survived this correction intact.
+  2. **Explicit "none" answer, simulating the real CASE A1 write** (the
+     exact command CASE A1 specifies, not a fabricated value: real
+     credits `258.48`, real fresh `episode_id`) **saved to
+     `current-ticket.json`, then a commit:** succeeded, with
+     `Kiro-Ticket: none` and a **real** `Kiro-Episode`
+     (`ep_6a903eaa79c1c1`) — not the degraded `Kiro-Episode: none` /
+     `Kiro-Credits: n/a` the original silent-default design used to
+     produce for untracked work.
+  3. **A real, already-set ticket, then commit:** succeeded normally,
+     unaffected.
+  4. **`post-commit`'s switch flow, explicitly typing `none`:** accepted
+     with the new confirmation message and a real baseline/episode;
+     confirmed on the *next* commit that the switch actually took
+     effect (`Kiro-Ticket: none`, same real episode). A follow-up
+     regression check confirmed a real ticket typed at the same prompt
+     right after still defers to `.kiro/pending-ticket-check.json`
+     exactly as before — unaffected by restoring `none` alongside it.
+  **What still can't be tested directly, same limitation as the
+  reversal above:** the live chat exchange itself (Kiro asking, a human
+  answering "none," Kiro recognizing and saving it) — simulated by
+  writing `current-ticket.json` exactly as the instruction specifies,
+  using the real credit-read command, not by watching a live
+  conversation.
 
 ## 8. What's still open
 
@@ -605,13 +752,16 @@ actually reached.
   being relied on
 - `pending-ticket-check.json` is still a single file, not a queue —
   the null-clobbers-a-real-value bug this exact scenario produced was
-  found and fixed 2026-08-27 (see §7), but the original, always-accepted
-  trade-off remains: if a real value gets overwritten by ANOTHER real
-  value (two switches typed before chat ever catches up), only the more
-  recent one survives — "most recent switch wins," same as before this
-  whole pending-check mechanism existed. Not a bug, just a known limit
-  of one file instead of a queue (Option A, considered and rejected —
-  see §7).
+  found and fixed 2026-08-27, and then made structurally impossible the
+  same day when `pre-commit` stopped writing a `null` flag at all (the
+  mandatory-ticket policy reversal, see §7) — there is no more `null`
+  shape for a real value to be clobbered by. The original,
+  always-accepted trade-off remains for the one shape that's left: if a
+  real value gets overwritten by ANOTHER real value (two switches typed
+  before chat ever catches up), only the more recent one survives —
+  "most recent switch wins," same as before this whole pending-check
+  mechanism existed. Not a bug, just a known limit of one file instead
+  of a queue (Option A, considered and rejected — see §7).
 
 **Blocked on AWS write access (no write-capable IAM role exists yet):**
 - S3 upload for tracking data (if ever reinstated — trailers are the real source of truth now)
@@ -662,3 +812,4 @@ Full design in [`docs/runbook.md`](docs/runbook.md) and
 [`docs/architecture.png`](docs/architecture.png).
 
 Test commit for ANG-123 - README update simulation
+test line 2
