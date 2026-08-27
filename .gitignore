@@ -1,13 +1,25 @@
 # Local Kiro session state — never shared, resets per branch
 .kiro/current-ticket.json
 
+# A ticket typed at the terminal (pre-commit's manual-entry fallback, or
+# post-commit's ticket-switch prompt) that couldn't be validated against
+# Jira at the git-hook level (no credential there) — Kiro chat's
+# ask-ticket hook checks it for real via atlassian-rovo MCP on the next
+# message, then deletes this file. See TODO.md, 2026-08-27.
+.kiro/pending-ticket-check.json
+
 # Sonar scan scratch output
 /tmp/sonar-scan.log
 
-# Local hook diagnostic log — NOT the tracking data itself (that's the
-# .kiro-tracking/*.json files, which ARE meant to be committed every
-# time; see docs/runbook.md). This is just "did the hook run ok" noise.
-.kiro-tracking/hook-health.log
+# .kiro-tracking/ — hook diagnostic log plus one debug-convenience JSON
+# file per ticket (overwritten every commit, never accumulated). Neither
+# is the tracking data anymore: as of 2026-08-27 the real record is each
+# commit's own Kiro-* trailers (see .githooks/commit-msg), which
+# scripts/calculate-pr-credits.sh reads from git history directly.
+# Previously this held one *committed* JSON file per commit forever —
+# removed after confirming (grep) nothing but commit-msg ever read them.
+# See TODO.md and docs/runbook.md.
+.kiro-tracking/
 
 # OS / editor noise
 .DS_Store

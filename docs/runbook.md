@@ -336,11 +336,39 @@ else
   EPISODE_ID_JSON="null"
 fi
 
-# 4. Write the record and include it in this same commit
+# 4. Hand the trailer values to commit-msg — no intermediate JSON file.
+# REMOVED 2026-08-27: this used to write a brand-new
+# ".kiro-tracking/${TICKET_ID}-$(date +%s).json" file EVERY commit and
+# `git add` it, so the folder accumulated one committed file per commit
+# forever. Grepped the whole repo first to confirm commit-msg's
+# `ls -t .kiro-tracking/*.json | head -1` was the ONLY reader anywhere;
+# calculate-pr-credits.sh already reads trailers from git history, never
+# these files. So the file was pure hop-across-hooks plumbing.
+#
+# pre-commit and commit-msg are separate git-invoked processes — a shell
+# variable set here doesn't survive into commit-msg's process — so this
+# writes the values as plain key=value lines into a file inside .git/
+# itself: never tracked, never committed, one file, overwritten every
+# commit. commit-msg sources it directly and deletes it right after.
+GIT_DIR=$(git rev-parse --git-dir)
+cat > "$GIT_DIR/KIRO_COMMIT_DATA" << INNER_EOF
+KIRO_TICKET_ID="$TICKET_ID"
+KIRO_TICKET_SOURCE="$SOURCE"
+KIRO_SESSION_ID="$SESSION_ID"
+KIRO_CREDITS_DELTA="$CREDITS_DELTA"
+KIRO_CREDIT_CONFIDENCE="$CREDIT_CONFIDENCE"
+KIRO_EPISODE_ID="$EPISODE_ID"
+INNER_EOF
+
+# 4b. Optional debug convenience copy — ONE file per ticket, overwritten
+# every commit (not accumulated), gitignored, never `git add`-ed, never
+# read by anything. Just lets a human glance at the last commit's
+# numbers without decoding trailers.
 mkdir -p .kiro-tracking
-LOGFILE=".kiro-tracking/${TICKET_ID}-$(date +%s).json"
-cat > "$LOGFILE" << INNER_EOF
+DEBUG_FILE=".kiro-tracking/${TICKET_ID}.json"
+cat > "$DEBUG_FILE" << INNER_EOF
 {
+  "_comment": "Debug convenience only — overwritten every commit, not read by any hook or script.",
   "ticket_id": "$TICKET_ID",
   "source_of_ticket_id": "$SOURCE",
   "kiro_session_id": $SESSION_ID_JSON,
@@ -353,16 +381,14 @@ cat > "$LOGFILE" << INNER_EOF
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 INNER_EOF
-git add "$LOGFILE"
 
 # 5. S3 upload removed 2026-08-25 — the AWS role is read-only, this line
 # was failing every single commit (see hook-health.log's alternating
 # ok/failed before this change). The commit message trailers (see
-# commit-msg) are now the durable, authoritative record — git push and
+# commit-msg) are the durable, authoritative record — git push and
 # reading commit messages back don't need any AWS write access at all.
-# This local JSON file stays as a convenience copy, not the source of
-# truth. Health logging kept, unconditionally "ok" now — nothing here
-# can fail once the S3 attempt is gone.
+# Health logging kept, unconditionally "ok" now — nothing here can fail
+# once the S3 attempt is gone.
 echo "hook_status=ok" >> .kiro-tracking/hook-health.log
 ```
 **Prerequisite:** this now needs `python3` (standard on most dev machines) in addition to `jq`, `gitleaks`, and the AWS CLI — no `sqlite3` CLI binary required, since Python's built-in `sqlite3` module reads the file directly.
@@ -404,10 +430,15 @@ Start `MODE` at `warn` in AWS Parameter Store. Only flip it to `block` once
 you've watched the false-positive rate for a few weeks — same rollout
 pattern as the PR-gate Lambda.
 
-### `.kiro-tracking/{TICKET_ID}-{timestamp}.json`
-**Who makes it:** the pre-commit file above, every single commit. **This is the real tracking data.**
+### `.kiro-tracking/{TICKET_ID}.json`
+**Who makes it:** the pre-commit file above, every commit — overwriting the same file each time. **Debug convenience only, not the real tracking data anymore.**
+
+Until 2026-08-27 this was `{TICKET_ID}-{timestamp}.json`, a brand-new file every commit, `git add`-ed and kept forever. Removed after confirming (grep, across the whole repo) that the only thing that ever read these files was `commit-msg`'s "latest file" lookup — nothing else depended on the history piling up. **The real record now is each commit's own `Kiro-*` trailers** (see `commit-msg` below); `calculate-pr-credits.sh` reads those from git history directly, never this file. pre-commit hands the values to `commit-msg` via a transient `$(git rev-parse --git-dir)/KIRO_COMMIT_DATA` file instead — never tracked, deleted right after `commit-msg` reads it.
+
+This one is gitignored, purely for a human to glance at:
 ```json
 {
+  "_comment": "Debug convenience only — overwritten every commit, not read by any hook or script.",
   "ticket_id": "PROJ-123",
   "source_of_ticket_id": "kiro_session",
   "kiro_session_id": "8f3a1c2e-...",
@@ -429,11 +460,6 @@ pattern as the PR-gate Lambda.
 **What it does:** writes the same tracking info directly into the commit message, so anyone reading git history can see it without opening a file.
 ```bash
 #!/bin/bash
-# NOTE: must read one whole file, not `cat *.json | tail -1` — pre-commit writes
-# each record pretty-printed across multiple lines, so `tail -1` on concatenated
-# files grabs a lone trailing "}" and jq fails on it (confirmed by testing: both
-# trailers below came out empty, not even their "none"/"n/a" fallback).
-#
 # Guard: don't rescue an empty message into looking non-empty. Confirmed by
 # testing (found while adding a commit.template): git's own "abort on empty
 # message" check runs AFTER commit-msg, using whatever this hook produces —
@@ -448,13 +474,28 @@ if [ -z "$REAL_CONTENT" ]; then
   exit 0
 fi
 
-LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
-TICKET=$(jq -r '.ticket_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-EPISODE=$(jq -r '.episode_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
-CONFIDENCE=$(jq -r '.credit_confidence // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
-SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-SOURCE=$(jq -r '.source_of_ticket_id // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+# Trailer values come from pre-commit via a transient file inside .git/ —
+# REMOVED 2026-08-27: this used to read `ls -t .kiro-tracking/*.json |
+# head -1`, the "latest" of an ever-accumulating, permanently-committed
+# JSON file per commit. Confirmed by grep first that this line was the
+# only reader of those files anywhere in the repo, so pre-commit now
+# hands values across directly instead — see pre-commit's step 4.
+# Defaults below match the old jq "// fallback" behavior for a value
+# that's missing or never set.
+GIT_DIR=$(git rev-parse --git-dir)
+DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
+KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
+KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
+[ -f "$DATA_FILE" ] && . "$DATA_FILE"
+rm -f "$DATA_FILE"
+
+TICKET="${KIRO_TICKET_ID:-none}"
+EPISODE="${KIRO_EPISODE_ID:-none}"
+CREDITS="${KIRO_CREDITS_DELTA:-n/a}"
+[ "$CREDITS" = "null" ] && CREDITS="n/a"
+CONFIDENCE="${KIRO_CREDIT_CONFIDENCE:-n/a}"
+SESSION_ID="${KIRO_SESSION_ID:-none}"
+SOURCE="${KIRO_TICKET_SOURCE:-n/a}"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"

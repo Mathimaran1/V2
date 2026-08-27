@@ -48,66 +48,68 @@ SOURCE="kiro_session"
 # was answered through Kiro's own ask-ticket hook, which checks the
 # real atlassian-rovo MCP connection — see
 # aidlc-ask-for-ticket-if-missing.json — so it's not re-checked here.
-# branch_name and manual_entry bypass Kiro entirely, so this hook
-# validates them itself.
 #
-# This is a plain git hook, not Kiro's agent — confirmed by inspecting
-# state.vscdb that it genuinely CANNOT reuse Kiro's own atlassian-rovo
-# OAuth session: the token/client/verifier secrets stored there are
-# Electron safeStorage-encrypted blobs (the "v11" version-prefix bytes),
-# gated behind gnome-keyring, not plainly readable outside Kiro's own
-# process. Closest alternative: a separately configured Jira Cloud API
-# token via JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN env vars
-# (standard Jira REST API v3 basic auth) — not yet provisioned anywhere
-# in this repo, so in practice every call below currently takes the
-# "skipped-no-credential" branch until someone sets those up. The curl
-# logic itself is real and tested — against a local mock server that
-# replicates Jira's exact API contract (200/404/timeout), not the real
-# Jira instance, since no credential exists here to test against for
-# real. See TODO.md's 2026-08-26 entry for the full test record.
-validate_jira_ticket() {
-  local ticket="$1"
-  if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
-    mkdir -p .kiro-tracking
-    echo "hook_status=pre-commit-jira-validation-skipped-no-credential ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
-    return 0  # can't check at all — degrade gracefully, accept unvalidated
-  fi
-  local http_code
-  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-    -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-    "$JIRA_BASE_URL/rest/api/3/issue/$ticket?fields=key" 2>/dev/null)
-  mkdir -p .kiro-tracking
-  if [ "$http_code" = "200" ]; then
-    return 0
-  elif [ "$http_code" = "404" ]; then
-    echo "hook_status=pre-commit-jira-validation-failed ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
-    return 1  # confirmed: does not exist
-  else
-    # timeout, network error, auth failure, 5xx — can't distinguish
-    # "invalid" from "couldn't check" on an inconclusive code, so
-    # degrade gracefully rather than reject on ambiguous evidence
-    echo "hook_status=pre-commit-jira-validation-unreachable ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket http_code=$http_code" >> .kiro-tracking/hook-health.log
-    return 0
-  fi
-}
-
+# branch_name and manual_entry USED to validate themselves via a
+# validate_jira_ticket() that called Jira's REST API directly with
+# JIRA_BASE_URL/EMAIL/API_TOKEN — removed 2026-08-27 (manual_entry and
+# the post-commit switch prompt first, branch_name here last) after
+# confirming those env vars are provisioned nowhere in this repo, so
+# that function could only ever hit its own "no credential configured"
+# branch and accept anything unvalidated — a real ticket and a made-up
+# one were indistinguishable (confirmed live: "ZZZZ-99999" was accepted
+# exactly like a real ticket in the switch flow — see TODO.md). This is
+# a plain git hook, not Kiro's agent, and genuinely cannot reuse Kiro's
+# own atlassian-rovo OAuth session either (confirmed by inspecting
+# state.vscdb: the token/client/verifier secrets there are Electron
+# safeStorage-encrypted, gated behind gnome-keyring). Rather than
+# provision a second Jira credential just for this hook, branch_name
+# now defers to Kiro chat's already-working MCP connection the same way
+# manual_entry and the switch prompt do — see below.
 if [ -z "$TICKET_ID" ]; then
   TICKET_ID=$(git branch --show-current | grep -oE '^[A-Z]+-[0-9]+')
   SOURCE="branch_name"
-  if [ -n "$TICKET_ID" ] && ! validate_jira_ticket "$TICKET_ID"; then
-    echo "⚠️  $TICKET_ID (from branch name) doesn't appear to be a real Jira ticket — falling back to manual entry." >&2
-    TICKET_ID=""
+  if [ -n "$TICKET_ID" ]; then
+    TYPED_TICKET="$TICKET_ID"
+    mkdir -p .kiro
+    cat > .kiro/pending-ticket-check.json << INNER_EOF
+{"typed_ticket": "$TYPED_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+INNER_EOF
+    echo "⚠️  Can't validate '$TYPED_TICKET' (from branch name) against Jira from a terminal" >&2
+    echo "   hook (no credential configured at this level). Tracking this commit as 'none'" >&2
+    echo "   for now — tell Kiro about '$TYPED_TICKET' in your next chat message and it'll" >&2
+    echo "   validate via the real Jira connection and apply it going forward." >&2
+    TICKET_ID="none"
   fi
 fi
 
 if [ -z "$TICKET_ID" ]; then
   read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID < /dev/tty
   SOURCE="manual_entry"
-  if [ -n "$TICKET_ID" ] && [ "$TICKET_ID" != "none" ] && ! validate_jira_ticket "$TICKET_ID"; then
-    echo "❌ $TICKET_ID doesn't appear to be a real Jira ticket — please check the ID." >&2
-    echo "   Commit blocked rather than tracking an invalid ticket. Re-run" >&2
-    echo "   and type a real ticket ID (or 'none') at the prompt." >&2
-    exit 1
+  # 2026-08-27: stopped trusting a typed ticket ID directly here.
+  # validate_jira_ticket() at this call site can only ever hit the
+  # "skipped-no-credential" branch — JIRA_BASE_URL/EMAIL/API_TOKEN are
+  # not provisioned anywhere in this repo (confirmed by checking the
+  # environment directly, not assumed) — so it always returned success
+  # unvalidated, meaning a typed ticket and a made-up one were
+  # indistinguishable at this point (confirmed live: "ZZZZ-99999" was
+  # accepted exactly like a real ticket — see TODO.md). Kiro chat's own
+  # ask-ticket hook DOES have real, working Jira access via the
+  # atlassian-rovo MCP connection — so defer to that instead of
+  # pretending this hook can validate anything: track this commit
+  # under "none" (the same honest bucket already used for genuinely
+  # untracked work) and hand the typed value to Kiro chat to check for
+  # real on the next message. Never blocks the commit either way.
+  if [ -n "$TICKET_ID" ] && [ "$TICKET_ID" != "none" ]; then
+    TYPED_TICKET="$TICKET_ID"
+    mkdir -p .kiro
+    cat > .kiro/pending-ticket-check.json << INNER_EOF
+{"typed_ticket": "$TYPED_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+INNER_EOF
+    echo "⚠️  Can't validate '$TYPED_TICKET' against Jira from a terminal hook (no credential" >&2
+    echo "   configured at this level). Tracking this commit as 'none' for now — tell Kiro" >&2
+    echo "   about '$TYPED_TICKET' in your next chat message and it'll validate via the real" >&2
+    echo "   Jira connection and apply it going forward." >&2
+    TICKET_ID="none"
   fi
 fi
 
@@ -307,11 +309,42 @@ else
   EPISODE_ID_JSON="null"
 fi
 
-# 4. Write the record and include it in this same commit
+# 4. Hand the trailer values to commit-msg — no intermediate JSON file.
+# REMOVED 2026-08-27: this used to write a brand-new
+# ".kiro-tracking/${TICKET_ID}-$(date +%s).json" file EVERY commit and
+# `git add` it, so the folder accumulated one committed file per commit
+# forever (35 of them by the time this was caught — see TODO.md). Grepped
+# the whole repo first to confirm: commit-msg's `ls -t .kiro-tracking/*.json
+# | head -1` was the ONLY reader anywhere. calculate-pr-credits.sh already
+# reads trailers straight from git history, never these files. So the file
+# was pure hop-across-hooks plumbing, not data anyone needed kept.
+#
+# pre-commit and commit-msg are separate git-invoked processes — a shell
+# variable set here does not survive into commit-msg's process, so
+# *something* has to carry these values across that boundary. This writes
+# them as plain key=value lines into a file inside .git/ itself: never
+# tracked, never committed, exactly one file, overwritten every commit.
+# commit-msg sources it directly and deletes it right after reading.
+GIT_DIR=$(git rev-parse --git-dir)
+cat > "$GIT_DIR/KIRO_COMMIT_DATA" << INNER_EOF
+KIRO_TICKET_ID="$TICKET_ID"
+KIRO_TICKET_SOURCE="$SOURCE"
+KIRO_SESSION_ID="$SESSION_ID"
+KIRO_CREDITS_DELTA="$CREDITS_DELTA"
+KIRO_CREDIT_CONFIDENCE="$CREDIT_CONFIDENCE"
+KIRO_EPISODE_ID="$EPISODE_ID"
+INNER_EOF
+
+# 4b. Optional debug convenience copy — ONE file per ticket, overwritten
+# every commit (not accumulated), so a human can glance at the last
+# commit's numbers without decoding trailers. Gitignored — never
+# `git add`-ed, and nothing (commit-msg included) reads it back; it's a
+# side effect for a human, not a data source anything depends on.
 mkdir -p .kiro-tracking
-LOGFILE=".kiro-tracking/${TICKET_ID}-$(date +%s).json"
-cat > "$LOGFILE" << INNER_EOF
+DEBUG_FILE=".kiro-tracking/${TICKET_ID}.json"
+cat > "$DEBUG_FILE" << INNER_EOF
 {
+  "_comment": "Debug convenience only — overwritten every commit, not read by any hook or script. The real record is this commit's Kiro-* trailers.",
   "ticket_id": "$TICKET_ID",
   "source_of_ticket_id": "$SOURCE",
   "kiro_session_id": $SESSION_ID_JSON,
@@ -324,14 +357,12 @@ cat > "$LOGFILE" << INNER_EOF
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 INNER_EOF
-git add "$LOGFILE"
 
 # 5. S3 upload removed 2026-08-25 — the AWS role is read-only, this line
 # was failing every single commit (see hook-health.log's alternating
 # ok/failed before this change). The commit message trailers (see
-# commit-msg) are now the durable, authoritative record — git push and
+# commit-msg) are the durable, authoritative record — git push and
 # reading commit messages back don't need any AWS write access at all.
-# This local JSON file stays as a convenience copy, not the source of
-# truth. Health logging kept, unconditionally "ok" now — nothing here
-# can fail once the S3 attempt is gone.
+# Health logging kept, unconditionally "ok" now — nothing here can fail
+# once the S3 attempt is gone.
 echo "hook_status=ok" >> .kiro-tracking/hook-health.log

@@ -45,48 +45,35 @@ if [ "$HAS_TTY" = "1" ]; then
   fi
 fi
 
-# Jira ticket-existence validation — same reasoning and same closest
-# alternative as pre-commit's branch_name/manual_entry validation (see
-# its comments): this is a plain git hook, not Kiro's agent, so it
-# can't reuse Kiro's own atlassian-rovo OAuth session (confirmed
-# unreadable outside Kiro's process — see pre-commit). Uses the same
-# JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN env vars; degrades gracefully
-# (proceeds with the switch) when no credential is configured or Jira
-# is unreachable, since an inconclusive check shouldn't block a real
-# ticket switch. Only "confirmed does not exist" (HTTP 404) actually
-# stops the switch.
-validate_jira_ticket() {
-  local ticket="$1"
-  if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
-    mkdir -p .kiro-tracking
-    echo "hook_status=post-commit-jira-validation-skipped-no-credential ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
-    return 0
-  fi
-  local http_code
-  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-    -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-    "$JIRA_BASE_URL/rest/api/3/issue/$ticket?fields=key" 2>/dev/null)
-  mkdir -p .kiro-tracking
-  if [ "$http_code" = "200" ]; then
-    return 0
-  elif [ "$http_code" = "404" ]; then
-    echo "hook_status=post-commit-jira-validation-failed ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket" >> .kiro-tracking/hook-health.log
-    return 1
-  else
-    echo "hook_status=post-commit-jira-validation-unreachable ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket=$ticket http_code=$http_code" >> .kiro-tracking/hook-health.log
-    return 0
-  fi
-}
+# Jira validation via a git-hook-level REST call — REMOVED 2026-08-27.
+# It could only ever hit its own "no credential configured" branch
+# (JIRA_BASE_URL/EMAIL/API_TOKEN are provisioned nowhere in this repo,
+# confirmed by checking the environment directly), so it always
+# returned success unvalidated — a real ticket and a made-up one were
+# indistinguishable here (confirmed live: "ZZZZ-99999" was accepted
+# exactly like a real ticket — see TODO.md). Kiro chat's own ask-ticket
+# hook DOES have real, working Jira access via atlassian-rovo MCP, so
+# validation is deferred there instead of pretended here — see below.
 
 if [ "$HAS_TTY" = "1" ] && { [ "$SWITCH_ANSWER" = "y" ] || [ "$SWITCH_ANSWER" = "Y" ]; }; then
   read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty
-  VALIDATION_FAILED=0
-  if [ -n "$NEW_TICKET" ] && [ "$NEW_TICKET" != "none" ] && ! validate_jira_ticket "$NEW_TICKET"; then
-    echo "⚠️  $NEW_TICKET doesn't appear to be a real Jira ticket — please check the ID. NOT switching, current-ticket.json left untouched." >&2
-    NEW_TICKET=""
-    VALIDATION_FAILED=1
-  fi
-  if [ -n "$NEW_TICKET" ]; then
+  if [ -n "$NEW_TICKET" ] && [ "$NEW_TICKET" != "none" ]; then
+    # Can't validate against Jira from a terminal hook (same gap as
+    # pre-commit's manual-entry fallback — see its comments). Don't
+    # switch yet: leave current-ticket.json on the OLD ticket, and hand
+    # the typed value to Kiro chat's ask-ticket hook to check for real
+    # via atlassian-rovo MCP on the user's next message.
+    mkdir -p .kiro
+    cat > .kiro/pending-ticket-check.json << INNER_EOF
+{"typed_ticket": "$NEW_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+INNER_EOF
+    echo "⚠️  Can't validate '$NEW_TICKET' against Jira from a terminal hook (no credential" >&2
+    echo "   configured at this level). NOT switching yet — staying on the current ticket." >&2
+    echo "   Tell Kiro about '$NEW_TICKET' in your next chat message and it'll validate via" >&2
+    echo "   the real Jira connection and switch retroactively." >&2
+  elif [ "$NEW_TICKET" = "none" ]; then
+    # "none" isn't a claim about a real Jira ticket, so there's nothing
+    # to validate — switch immediately, same as before.
     RESULT=$(python3 -c "
 import sqlite3, json, os, time, secrets
 con = sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb'))
@@ -105,7 +92,7 @@ print('ep_' + format(int(time.time()), 'x') + secrets.token_hex(3))
     else
       echo "⚠️  Could not read the current credit baseline — NOT switching, current-ticket.json left untouched." >&2
     fi
-  elif [ "$VALIDATION_FAILED" = "0" ]; then
+  else
     echo "No ticket entered — staying on the current ticket." >&2
   fi
 fi

@@ -13,13 +13,32 @@ if [ -z "$REAL_CONTENT" ]; then
   exit 0
 fi
 
-LATEST_LOGFILE=$(ls -t .kiro-tracking/*.json 2>/dev/null | head -1)
-TICKET=$(jq -r '.ticket_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-EPISODE=$(jq -r '.episode_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-CREDITS=$(jq -r '.credits_used_so_far // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
-CONFIDENCE=$(jq -r '.credit_confidence // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
-SESSION_ID=$(jq -r '.kiro_session_id // "none"' "$LATEST_LOGFILE" 2>/dev/null)
-SOURCE=$(jq -r '.source_of_ticket_id // "n/a"' "$LATEST_LOGFILE" 2>/dev/null)
+# Trailer values come from pre-commit via a transient file inside .git/ —
+# REMOVED 2026-08-27: this used to read `ls -t .kiro-tracking/*.json |
+# head -1`, the "latest" of an ever-accumulating, permanently-committed
+# JSON file per commit (see TODO.md). Confirmed by grep first that this
+# line was the only reader of those files anywhere in the repo, so
+# pre-commit now hands values across directly instead of via a tracked
+# file — see pre-commit's step 4. Defaults below match the old jq
+# "// fallback" behavior for a value that's missing or never set.
+GIT_DIR=$(git rev-parse --git-dir)
+DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
+KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
+KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
+# shellcheck disable=SC1090
+[ -f "$DATA_FILE" ] && . "$DATA_FILE"
+rm -f "$DATA_FILE"
+
+TICKET="${KIRO_TICKET_ID:-none}"
+EPISODE="${KIRO_EPISODE_ID:-none}"
+CREDITS="${KIRO_CREDITS_DELTA:-n/a}"
+# pre-commit writes the literal string "null" (not JSON null, this is a
+# plain key=value file) when it couldn't compute a delta at all — same
+# case the old jq "// n/a" fallback caught when the JSON field was null.
+[ "$CREDITS" = "null" ] && CREDITS="n/a"
+CONFIDENCE="${KIRO_CREDIT_CONFIDENCE:-n/a}"
+SESSION_ID="${KIRO_SESSION_ID:-none}"
+SOURCE="${KIRO_TICKET_SOURCE:-n/a}"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"

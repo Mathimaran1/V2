@@ -317,17 +317,26 @@ each):
 .kiro/
   steering/aidlc-git-conventions.md   # rules Kiro always follows
   settings/mcp.json                   # Jira MCP connection (SonarQube isn't MCP)
-  hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C only — CASE B is in post-commit (§3)
+  hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C, plus a PRIORITY CHECK that
+                                               # validates any terminal-typed pending ticket
+                                               # first (2026-08-27, §6) — CASE B is in post-commit (§3)
   hooks/aidlc-bootstrap-git-hooks.json        # auto-sets up .githooks/ (unconfirmed trigger — §5)
   current-ticket.json                 # local, gitignored — current ticket + starting credits
+  pending-ticket-check.json           # local, gitignored — a terminal-typed ticket awaiting
+                                       # real Jira validation via Kiro chat (2026-08-27, §6)
 .githooks/
   post-checkout   # CASE A of episode boundaries (§3); also the rebase bug (§6)
-  pre-commit      # ticket resolution + Jira validation + credit read + tracking-data write
-  post-commit     # CASE B of episode boundaries (§3); also Jira-validates a switch
+  pre-commit      # ticket resolution + credit read + trailer handoff — manual-entry AND
+                  # branch-name tickets are both deferred to Kiro chat for real Jira
+                  # validation, not trusted directly (2026-08-27, §6)
+  post-commit     # CASE B of episode boundaries (§3); ticket-switches are deferred to Kiro
+                  # chat the same way (2026-08-27, §6)
   pre-push        # SonarQube gate — disabled with a warning (§6)
   commit-msg      # stamps all six Kiro-* trailers onto the commit message
-.kiro-tracking/    # per-commit tracking JSON (convenience copy, not source of truth)
-                   # + hook-health.log (gitignored — local diagnostic only, see §6)
+.kiro-tracking/    # gitignored — one debug-convenience JSON per ticket, overwritten
+                   # each commit (not the source of truth; removed the old
+                   # commit-forever accumulation 2026-08-27, see §6)
+                   # + hook-health.log (also gitignored — local diagnostic only)
 docs/
   runbook.md                # full design doc (some sections predate the trailers-not-S3
                              # pivot — see §6, "DuckDB dashboard still assumes S3")
@@ -348,11 +357,11 @@ item below was confirmed by actually testing it, not inferred.
 | Gap | Status | Why |
 |---|---|---|
 | `git rebase` clears `current-ticket.json` | **Open, fixable with code** | `post-checkout`'s `$3=1` check means "this checkout moved via a branch-level ref," which rebase triggers internally too — confirmed by reproducing it twice. Fix needs `post-checkout` to also check the ref actually changed and/or HEAD landed on a branch, not just trust `$3=1` alone. |
-| Amend/rebase creates duplicate local `.kiro-tracking/*.json` files | **Open, corrected design exists, not built** | Each amend re-runs `pre-commit`, which writes a fresh file every time. A patch-the-real-SHA-in-afterward fix was designed (needs a new logic in `post-commit`, since `pre-commit` can't know its own future SHA), but never built — it targeted the old S3-as-source-of-truth design. Lower-stakes now that trailers, not these local files, are what `calculate-pr-credits.sh` actually reads. |
+| Amend/rebase created duplicate local `.kiro-tracking/*.json` files | **Fixed 2026-08-26 by removing the behavior, not patching it** | The old design wrote a brand-new committed JSON file per commit forever, so every amend added another. Confirmed by grep that nothing but `commit-msg`'s "latest file" lookup ever read these files — `calculate-pr-credits.sh` already reads trailers from git history, not this directory. Rather than build the previously-designed patch-the-SHA-in-afterward fix, the accumulation itself was removed: `pre-commit` now hands trailer values to `commit-msg` via a transient, untracked `.git/`-internal file (deleted right after use), plus one gitignored, overwritten-not-accumulated debug file per ticket. Amend/rebase just overwrites that one file again — nothing to deduplicate anymore. The 35 already-committed files from the old design were deleted from this repo the same day. |
 | `git cherry-pick` skips every hook | **Open — standard git behavior, cannot be fixed locally** | Confirmed: no gitleaks banner, `hook-health.log` untouched, trailers byte-identical to the original rather than regenerated. A cherry-picked commit is not secret-scanned. |
 | `--no-verify` / unset `core.hooksPath` bypass tracking entirely | **Open — standard git escape hatches** | Nothing local can prevent these; only server-side enforcement (the not-yet-built PR-gate Lambda, §2) could catch a commit missing its Kiro tag after the fact. |
 | Consent lived only in `pre-commit`, not every hook | **Fixed 2026-08-26** | A status report caught the "baked into every hook" claim was never true — confirmed by grepping all 5 hooks. `post-checkout` and `pre-push` now carry a lightweight marker-only check (logs, never blocks). Does **not** close the `--no-verify`/cherry-pick gap above — those still skip `pre-commit` (and thus consent) entirely. |
-| Fake/unvalidated ticket IDs accepted silently | **Fixed 2026-08-26** | Existence-checking built and tested at all three points a ticket ID gets set (§4) — 9 mechanical scenarios plus a live Kiro chat session confirming the MCP path for real. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass this like every other pre-commit-based check. |
+| Fake/unvalidated ticket IDs accepted silently | **Partially fixed 2026-08-26, fully closed across all 4 entry points 2026-08-27** | The 2026-08-26 fix validated the CASE A/C chat-based path (Kiro asking in chat) against live `atlassian-rovo` MCP — that part holds up. But `pre-commit`'s manual-entry fallback, `pre-commit`'s branch-name resolution, and `post-commit`'s ticket-switch prompt also called a `validate_jira_ticket()` that hits Jira's REST API directly — and this row's original "9 mechanical scenarios" claim didn't catch that `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN` are unset anywhere in this repo, so that function always took its "no credential" branch and accepted anything unvalidated. Confirmed live on 2026-08-27: a typed ticket (`ZZZZ-99999`) was accepted at the switch prompt exactly like a real one. **Fixed the same day, all three remaining entry points**, without a second Jira credential: each one now defers to Kiro chat's already-working MCP connection instead of pretending to validate locally — the typed/branch-derived ticket is written to `.kiro/pending-ticket-check.json`, the commit is tracked as `none` (or the switch left un-applied), and Kiro's ask-ticket hook validates it for real on the user's next chat message. `validate_jira_ticket()` itself — never able to validate anything in practice — was deleted from both hooks rather than left as dead code. Trade-off, stated plainly: a terminal-typed or branch-derived ticket isn't corrected until the next chat message, not instantly, and only the most recent pending write survives if several commits happen before that next message. Assignment-checking remains explicitly out of scope (§7), and `--no-verify`/cherry-pick still bypass all of this like every other pre-commit-based check. **Still not independently verified:** the chat-side half (Kiro actually reading the pending file and validating via live MCP) — logically consistent with the already-proven CASE A1/C1 pattern, but needs a real Kiro session to exercise, which this fix's own testing couldn't reach; the git-hook side (writing the pending file, refusing to trust an unvalidated ID, `none` correctly unaffected) was tested for real across all three entry points, real and fake tickets each. |
 | Squash-merge loses all per-commit trailers | **Open — structural limit of trailer-based tracking** | Confirmed directly: 3 commits with distinct trailers, squashed with a local `git merge --squash`, and the result has none of them. **Not yet confirmed against real AWS CodeCommit specifically** — the test used local git, and CodeCommit's own PR-merge behavior (once that pipeline stage exists at all — see §8) hasn't been checked for whether it squashes the same way. No fix proposed either way — this is a real cost of storing tracking data in commit messages instead of an external system. |
 | Low-confidence credit numbers counted equally in a ticket's total | **Open — `calculate-pr-credits.sh` never reads `Kiro-Confidence` at all** | Confirmed by reading the actual aggregation logic: it maxes and sums `Kiro-Credits` per `(ticket, episode)` with zero reference to the confidence field anywhere in the script. A stale, low-confidence number sits in the max pool with equal weight to a genuinely fresh one. No fix proposed. |
 | `hook-health.log` has no integrity protection | **Open — and not git-tracked at all** | Deliberately gitignored (it's local diagnostic noise, not the tracking record). Anyone can edit or delete it with zero trace, and it was never shared to begin with. |
@@ -418,6 +427,29 @@ actually reached.
   agent ask in chat first, wait for a real reply, then set an env var
   the hook can actually check — a real signal, unlike guessing from TTY
   presence.
+- **`.kiro-tracking/*.json`'s "new file every commit, keep forever"
+  design — removed, not patched (2026-08-27).** It was already just a
+  convenience copy per §7's trailers decision above; grepping the whole
+  repo confirmed nothing but `commit-msg`'s own "latest file" lookup
+  ever read these files (`calculate-pr-credits.sh` reads trailers from
+  git history directly). `pre-commit` now hands trailer values to
+  `commit-msg` via a transient, untracked file inside `.git/` itself —
+  deleted right after `commit-msg` reads it — instead of a committed
+  JSON log. One gitignored debug file per ticket remains, overwritten
+  every commit, documented as a human-readable convenience only. Live-
+  tested in an isolated clone: trailers populate identically with zero
+  intermediate JSON files, and deleting the 35 already-committed files
+  from the old design didn't change `calculate-pr-credits.sh`'s output
+  at all (confirmed byte-for-byte, before/after). Also fixes the
+  amend/rebase duplicate-file gap from §6 as a side effect — there's
+  nothing left to duplicate. Deliberately kept out of `post-commit`:
+  that hook already can't be relied on to fire its interactive prompts
+  without a TTY or `$KIRO_AGENT_COMMIT` (§6), and more fundamentally it
+  runs *after* the commit object and message already exist — too late
+  to affect that commit's own trailers regardless of TTY. Trailer
+  computation stays entirely in `pre-commit` (which the ticket-source
+  logic already treats as the one hook guaranteed to run on every real
+  commit) plus `commit-msg`.
 - **"Commit now" skipping the ask-first questions — tried, then
   reversed the next day.** Briefly decided that an explicit, direct
   commit instruction counted as already answering the profile-click and
@@ -428,15 +460,43 @@ actually reached.
   wait.** A TTY existing was never proof someone's watching it — an
   abandoned terminal in Kiro's autopilot mode could hang either prompt
   forever otherwise. See §3 for the fix and its real test results.
+- **A second Jira REST credential, just for the git-hook level — decided
+  against (2026-08-27).** `pre-commit`'s manual-entry fallback and
+  `post-commit`'s ticket-switch prompt both had a `validate_jira_ticket()`
+  that could never actually validate anything (no credential configured,
+  confirmed live — see §6). Rather than provision `JIRA_BASE_URL`/
+  `JIRA_EMAIL`/`JIRA_API_TOKEN` to make that function real, both entry
+  points now hand the typed ticket to Kiro chat's already-working
+  `atlassian-rovo` MCP connection instead — one real Jira connection,
+  not two. The commit is tracked as `none` (or the switch is left
+  un-applied) via `.kiro/pending-ticket-check.json` until the user's
+  next chat message actually validates it. Traded a second credential
+  for a delay — stated plainly, not instant. Flagged the same day as
+  "closed on 2 of 3 entry points, `pre-commit`'s branch-name fallback
+  still calls the same never-actually-working function" — closed the
+  same way immediately after (still 2026-08-27), rather than left as a
+  separate loose end: a branch-name-derived ticket now defers the exact
+  same way, and `validate_jira_ticket()` — unused in both hooks once
+  its last real call site was gone — was deleted rather than kept as
+  dead code. All 4 entry points (chat, manual entry, branch name,
+  switch) now use one consistent rule.
 
 ## 8. What's still open
 
 **Fixable with code, no external blocker:**
 - `post-checkout` clearing `current-ticket.json` on `git rebase` (§6)
-- Amend/rebase duplicate local tracking-file cleanup (design exists, not built)
 - DuckDB dashboard query still targeting S3 instead of commit trailers
 - `calculate-pr-credits.sh --repo/--pr`'s success path, untested against a real PR
 - Confirming the `PostFileSave` bootstrap-hook trigger actually fires end-to-end
+- The new `pending-ticket-check.json` priority-check logic (§6) is
+  written and its embedded command verified by direct execution, but
+  its actual chat-driven validation (Kiro + live `atlassian-rovo` MCP)
+  has not been exercised in a real Kiro session yet — needs that before
+  being relied on
+- `pending-ticket-check.json` is a single file, overwritten on every
+  deferral — if more than one commit gets flagged before the next chat
+  message, only the most recent typed ticket survives to be validated;
+  earlier ones are silently lost
 
 **Blocked on AWS write access (no write-capable IAM role exists yet):**
 - S3 upload for tracking data (if ever reinstated — trailers are the real source of truth now)
