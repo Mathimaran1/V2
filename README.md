@@ -660,3 +660,5 @@ and looking at the actual output.
 
 Full design in [`docs/runbook.md`](docs/runbook.md) and
 [`docs/architecture.png`](docs/architecture.png).
+
+Test commit for ANG-123 - README update simulation
