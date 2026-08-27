@@ -1208,3 +1208,332 @@ a future person (or a future me).
       original request) now covers all three deferring paths at once,
       since they all funnel into the identical priority-check logic in
       `aidlc-ask-for-ticket-if-missing.json`.
+
+## 2026-08-27 (same day, follow-up): two real problems from the last commit attempt
+- [x] **Problem 1 — `.kiro/current-ticket.json` force-added despite
+      being gitignored on purpose.** A real commit
+      (`ANG-124: update hooks and tracking files`, made directly, not
+      through this session) force-added it. Confirmed it was already
+      *committed*, not just staged, by the time this was caught —
+      `git restore --staged` alone would have been a no-op. Since that
+      commit was the local tip and unpushed (18 commits ahead of
+      `origin/ANG-000-test-pr-credits-flow`, confirmed via `git branch
+      -vv` before touching anything), fixed cleanly with `git rm
+      --cached .kiro/current-ticket.json` + `git commit --amend
+      --no-edit` — removed from tracking and from that commit's history
+      entirely, file left untouched on disk, confirmed via `git
+      ls-files`, `git show --stat`, and `git status --ignored` (now
+      shows `!!`, correctly ignored again) after the amend.
+      **Added to `.kiro/steering/aidlc-git-conventions.md`'s commit
+      hygiene section:** never use `git add -f` to override a gitignore
+      refusal without explicit user confirmation first — a refusal is a
+      deliberate signal (often per-machine ephemeral state), not an
+      obstacle to route around.
+- [x] **Problem 2 — `post-commit`'s switch question was never checking
+      `$KIRO_AGENT_COMMIT`, the same class of bug `pre-commit`'s
+      profile-click prompt already found and fixed on 2026-08-26.**
+      `post-commit` only ever checked TTY presence (`{ : < /dev/tty; }`)
+      to decide whether to ask "Working on a different ticket now?" —
+      but an agent's own tool-execution shell CAN have a real TTY
+      attached (confirmed before, for pre-commit's prompt; now
+      confirmed for this one too), so a `KIRO_AGENT_COMMIT=1` commit
+      still got asked, dumping the question into a chat transcript as
+      inert, unanswerable text — a real incident, not hypothetical.
+      **Fixed:** `post-commit` now checks `$KIRO_AGENT_COMMIT` FIRST,
+      same priority order as `pre-commit`, logging a distinct
+      `hook_status=post-commit-switch-check-skipped-agent-commit` (kept
+      separate from `-skipped-no-tty` so the two causes stay
+      distinguishable in `hook-health.log`, same principle as every
+      other status line this session). `aidlc-git-conventions.md`
+      updated to match: CASE B's description now names both fallback
+      triggers explicitly instead of conflating "agent commit" with "no
+      terminal exists" (the same wrong assumption that caused the bug
+      in the first place), and the CASE B chat-counterpart paragraph
+      now says plainly that a TTY may well be attached — the real
+      signal is `$KIRO_AGENT_COMMIT`, not TTY absence.
+      **Tested for real, 4 scenarios, isolated repo, real pty (proving
+      an actual TTY was attached, not just absent — otherwise this
+      wouldn't distinguish the fix from the pre-existing no-TTY
+      fallback that already worked):**
+      1. **`KIRO_AGENT_COMMIT=1` through a real pty (the exact bug):**
+         no prompt appeared, commit completed immediately (no 5-minute
+         hang), `hook-health.log` recorded
+         `post-commit-switch-check-skipped-agent-commit`, and
+         `current-ticket.json` stayed exactly as it was — confirming
+         the fix, not just its absence of a crash.
+      2. **Regression — normal human TTY commit, no
+         `KIRO_AGENT_COMMIT`:** the question still appeared and was
+         answerable through the real pty exactly as before —
+         unaffected by this change.
+      3. **`KIRO_AGENT_COMMIT=1` with no TTY at all:** still logged the
+         more specific `-skipped-agent-commit`, not `-skipped-no-tty` —
+         confirms the priority order (agent check runs first).
+      `bash -n` syntax-checked after the edit.
+
+## 2026-08-27 (same day, follow-up): branch-name ticket guessing removed entirely
+- [x] **Decided:** having just given branch-name resolution its own
+      honest pending-ticket-check deferral (the entry two sections up),
+      removed the whole code path outright instead — a second,
+      easy-to-forget place resolving a ticket ID that nothing here
+      could actually validate, for a value (the branch name) nobody
+      explicitly asked to be treated as a ticket claim. One fewer
+      code path, one fewer thing that can silently guess wrong.
+- [x] **Changed:** deleted
+      `TICKET_ID=$(git branch --show-current | grep -oE
+      '^[A-Z]+-[0-9]+')`, `SOURCE="branch_name"`, and the
+      pending-ticket-check block that depended on it from
+      `.githooks/pre-commit` entirely. An empty `current-ticket.json`
+      now goes straight to the manual-entry prompt (still deferred to
+      chat via the same pending-file pattern) regardless of what the
+      branch is named. The "fail closed" error message's mention of
+      branch-naming convention was removed too, since it's no longer
+      relevant advice. `SOURCE` now has exactly two possible values,
+      `kiro_session` and `manual_entry` — confirmed by grep across the
+      whole repo that `branch_name` no longer appears anywhere as a
+      live code reference, only in historical comments/decision
+      entries explaining what was removed and why.
+      **Checked and found not applicable, not skipped:**
+      `scripts/calculate-pr-credits.sh` and
+      `scripts/coverage-report.sh` — grepped for
+      `source_of_ticket_id`/`branch_name`/`SOURCE`, zero matches in
+      either; neither script ever read the `SOURCE` field at all (only
+      `Kiro-Ticket`/`Kiro-Credits` trailers), so nothing there needed
+      updating.
+      `.kiro/steering/aidlc-git-conventions.md` and
+      `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json` — also
+      grepped, zero matches; the steering doc's "CASE A — branch
+      switch" is a different concept entirely (post-checkout resetting
+      `current-ticket.json` on a branch *change*, not guessing a ticket
+      ID from branch *text*), so nothing there referenced the removed
+      behavior to begin with.
+      `docs/runbook.md`'s embedded `pre-commit` code snippet did still
+      show the old branch-name block (already known to be a partially
+      stale doc from earlier sessions) — updated to match.
+- [x] **Tested for real, 3 scenarios, isolated repo, real pty:**
+      1. **Ticket-shaped branch (`ANG-777-something`), empty
+         `current-ticket.json`:** went straight to "No ticket found.
+         Enter ticket ID" with zero attempt to extract `ANG-777` from
+         the branch — confirmed by the prompt appearing immediately,
+         and `Kiro-Source: manual_entry` (never `branch_name`) in the
+         resulting trailers.
+      2. **Same branch, typing `ANG-777` manually at the prompt:**
+         deferred exactly like any other manual entry —
+         `pending-ticket-check.json` recorded `{"typed_ticket":
+         "ANG-777", ...}`, trailers showed `Kiro-Ticket: none` /
+         `Kiro-Source: manual_entry` — proving the branch name has no
+         special effect even when it happens to match the typed value.
+      3. **Regression — plain branch `master` (no ticket-shaped name
+         at all), same manual entry of `ANG-777`:** trailers came out
+         byte-identical to scenario 2 — confirms the behavior is now
+         genuinely the same regardless of branch name, exactly as
+         requested.
+      `bash -n` syntax-checked after the edit.
+
+## 2026-08-27 (same day, follow-up): pre-commit's interactive ticket prompt removed entirely — real design gap found through live testing
+- [x] **The gap:** `pre-commit`'s manual-entry fallback still had a
+      `read -p "No ticket found. Enter ticket ID (or 'none'): "
+      < /dev/tty` even after the redesign that stopped trusting whatever
+      it typed. Two real problems, not style preferences: (1) it
+      double-asked what Kiro chat's CASE A already asks whenever
+      `current-ticket.json` is empty — two separate places asking the
+      same question; (2) it hung/got interrupted outright when a commit
+      ran in a non-interactive context (an agent's tool execution) with
+      no controlling terminal able to answer it.
+- [x] **Changed:** removed the `read -p` entirely, along with the
+      "fail closed on a blank read" block right after it (now dead code
+      — `TICKET_ID` can never come out empty at that point anymore).
+      When `current-ticket.json` is empty, `pre-commit` now
+      unconditionally tracks the commit as `none`, writes
+      `.kiro/pending-ticket-check.json` with `{"typed_ticket": null,
+      "flagged_at": "..."}` (nothing was typed, so nothing to hand off
+      for validation — this is a "ticket owed" flag, not a value to
+      check), and lets the commit proceed with zero wait. `SOURCE` is
+      now `unset` for this case — `manual_entry` is no longer a
+      possible value (joining `branch_name`, removed the same day, a
+      few entries up).
+      `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`'s PRIORITY
+      CHECK section updated to handle two distinct pending-file shapes
+      instead of one: `typed_ticket` as a real string (only from
+      `post-commit`'s switch prompt now) still goes through the
+      existing atlassian-rovo MCP validation; `typed_ticket: null`
+      (from `pre-commit`, nothing typed) needs no MCP call at all — just
+      delete the pending file and fall through to CASE A below exactly
+      as if the file never existed, since `current-ticket.json` is
+      still empty either way and CASE A already asks unconditionally in
+      that situation. No new chat-side logic was needed for the "ask"
+      part — Kiro chat already does this identically to today, for
+      the same trigger condition it's always checked.
+      Also updated: the stale historical comment in `pre-commit`
+      explaining the branch-name removal (it still said ticket
+      resolution "goes through Kiro chat or manual entry below,
+      deferred to chat" — no longer accurate once manual entry stopped
+      deferring a typed value and started deferring nothing at all);
+      `docs/runbook.md`'s embedded snippet (removed both the `read -p`
+      and the now-dead fail-closed block, to match); confirmed via grep
+      that neither `scripts/calculate-pr-credits.sh` nor
+      `scripts/coverage-report.sh` reference `SOURCE` at all (same
+      finding as the branch-name removal, still holds).
+- [x] **Tested for real:**
+      1. **No TTY at all (plain non-interactive shell, the realistic
+         agent-tool-execution case), no ticket set:** `time git commit`
+         completed in **0.477 seconds** — no hang, no interruption,
+         confirming the exact failure mode this fix targets is gone.
+         Trailers came out `Kiro-Ticket: none` / `Kiro-Source: unset`;
+         pending file held `{"typed_ticket": null, ...}`;
+         `current-ticket.json` stayed `{}` — exactly the condition
+         CASE A already checks for.
+      2. **Real TTY attached (via pty), no ticket set:** confirmed no
+         "Enter ticket ID" prompt appears under any condition anymore —
+         only the pre-existing, unrelated profile-click and
+         ticket-switch prompts showed, proving the removal is complete,
+         not just the no-TTY path.
+      3. **A real, subtle interaction bug this fix's own testing
+         surfaced and confirmed, not just theorized:** `pending-ticket-
+         check.json` is a single file — `pre-commit` now writes a
+         `null` flag to it on every "no ticket set" commit, which can
+         silently clobber a genuinely typed ticket from an earlier
+         `post-commit` switch that hasn't reached chat yet. Reproduced
+         directly: commit N answered the switch prompt with `ANG-999`
+         (correctly written to the pending file); commit N+1, no chat
+         message in between, `current-ticket.json` still empty,
+         silently overwrote it with `{"typed_ticket": null, ...}` —
+         `ANG-999` was gone, never validated. Not fixed here (would
+         need either a queue instead of a single file, or refusing to
+         overwrite a real value with a `null` one) — documented as a
+         known, confirmed-real gap in README §8, not left implicit.
+      `bash -n` and `python3 -m json.tool` (via `json.load`)
+      syntax-checked after the edits.
+
+## 2026-08-27 (same day, follow-up): pending-ticket-check.json's null-clobbers-real-value bug fixed for real, not just documented
+- [x] **Two options proposed before building either, per direct
+      request:**
+      - **Option A — queue (array) instead of single object.**
+        Rejected: needs a schema change in three places (`pre-commit`,
+        `post-commit`, the priority-check hook's own logic), plus
+        invented semantics (does a stale real entry still get validated
+        after a newer one supersedes it? what does `[null, "ANG-999",
+        null]` even mean operationally?), and re-introduces the exact
+        "accumulate until something external drains it" shape already
+        removed from `.kiro-tracking/*.json` earlier this session —
+        bounded differently, not eliminated.
+      - **Option B — chosen. Check for an existing real `typed_ticket`
+        before writing; skip the write entirely if one's there.** One
+        conditional, no schema change, zero changes needed to
+        `post-commit` or the priority-check hook. Restores exactly the
+        pre-existing "most recent switch wins" trade-off (real-over-real
+        is fine, null-over-null is fine) without adding a queue's worth
+        of new semantics — matches this session's repeated preference
+        for a smaller, more honest mechanism over a more complete but
+        more complex one (branch-name removal, terminal-prompt removal,
+        `.kiro-tracking` accumulation removal — same pattern each time).
+- [x] **Changed:** `pre-commit`'s "no ticket set" block now reads
+      `.kiro/pending-ticket-check.json` (if it exists) via `jq -r
+      '.typed_ticket // empty'` before writing anything. If that comes
+      back non-empty (a real value is already pending), the write is
+      skipped entirely — the file is left byte-for-byte untouched — and
+      a distinct message explains why. This commit still tracks as
+      `none` either way; only the pending-file write is conditional.
+- [x] **Tested by literally re-running the exact clobbering scenario
+      from earlier the same day, with the fix in place, same isolated-
+      repo-plus-real-pty method:**
+      1. **Commit N** — answered post-commit's switch prompt with
+         `ANG-999`; pending file correctly recorded it.
+      2. **Commit N+1** — no chat message in between,
+         `current-ticket.json` still empty (the exact clobbering
+         setup): pending file came out **byte-for-byte unchanged**,
+         same `flagged_at` timestamp as commit N, with the new log
+         message confirming the guard fired: "A real ticket
+         ('ANG-999') is already awaiting validation from an earlier
+         commit — leaving it untouched rather than overwriting it with
+         nothing."
+      3. **Regression — commit N+1's own trailers unaffected:** still
+         honestly `Kiro-Ticket: none` / `Kiro-Source: unset` — confirms
+         the guard protects only the pending *file*, not this commit's
+         own tracking.
+      4. **Regression — writes resume once the pending file is
+         cleared** (simulating Kiro chat having processed it): a fresh
+         `null` flag gets written normally on the next ticketless
+         commit.
+      5. **Regression — `null`-over-`null` still overwrites normally:**
+         two genuinely ticketless commits in a row updated the
+         timestamp both times — confirms the guard is narrowly scoped
+         to "never let null erase a real value," not "never overwrite
+         anything."
+      `bash -n` syntax-checked after the edit.
+
+## 2026-08-27 (same day, follow-up): count-based (not time-based) fallback added to both CASE B chat questions
+- [x] **The limitation this is built around, stated as plainly as
+      requested, not softened:** the chat-based profile-click question
+      and the chat-based ticket-switch question both had a "wait for
+      their actual reply" instruction with no fallback at all if the
+      reply never clearly comes — unlike their terminal counterparts,
+      which have a real, code-enforced `read -t 300` (5-minute timeout).
+      **A chat equivalent of that timeout is not possible, not just
+      unbuilt:** Kiro can only respond to messages the user sends: it
+      cannot act on its own after a period of silence, no matter how
+      much real time passes with nobody saying anything. There is no
+      "wake up after 5 minutes" for a chat turn. So the fallback added
+      here is explicitly **count-based, not time-based** — it counts
+      unanswered attempts (up to 3), never elapsed time — and both the
+      steering doc and this entry say so in those exact words, per the
+      request, rather than being described as "after 1 minute" or any
+      other real-time framing that would misrepresent what's actually
+      possible.
+- [x] **Changed, both CASE B questions in
+      `.kiro/steering/aidlc-git-conventions.md`:** ask the question. If
+      the reply doesn't clearly answer it, ask again — up to 3 asks
+      total. If the reply to the third ask still doesn't clearly answer
+      it, stop asking:
+      - **Profile-click question:** proceed with the commit anyway,
+        setting `KIRO_AGENT_COMMIT=1` as usual, but ALSO
+        `KIRO_AGENT_COMMIT_UNCONFIRMED=1` — plus stating it plainly in
+        that same chat message ("Asked 3 times, no confirmation
+        received — committing anyway without confirmed readiness").
+      - **Ticket-switch question:** proceed as if the answer were "no"
+        (the pre-existing safe default for an ambiguous single reply,
+        now also used for 3 unanswered attempts), stating it plainly in
+        chat the same way.
+- [x] **Went one step further than "state it in chat" where it was
+      actually reachable, per the request's own "if reachable from a
+      steering instruction" clause — checked, not assumed impossible:**
+      the profile-click question has a real hook invocation
+      (`pre-commit`) running immediately after it resolves, so a second
+      env var IS reachable there. Added `$KIRO_AGENT_COMMIT_UNCONFIRMED`
+      to `.githooks/pre-commit`: when set alongside
+      `$KIRO_AGENT_COMMIT`, it logs a distinct
+      `hook_status=pre-commit-refresh-confirmed-via-chat-unconfirmed`
+      (vs. the normal `-confirmed-via-chat`), giving this specific piece
+      of the behavioral rule a real, auditable `hook-health.log` line —
+      not just a chat message that could scroll away. **Checked the
+      ticket-switch question for the same opportunity and found it
+      genuinely isn't reachable, not just harder:** that question
+      resolves entirely in chat, after `post-commit` has already
+      finished running for the commit that triggered it — there is no
+      hook invocation happening at the moment a fallback would fire to
+      log anything into. For that question, "stated plainly in chat" is
+      the only reachable form, and the steering doc says so explicitly
+      rather than implying otherwise.
+- [x] **Tested, two different ways, matched to what each part actually
+      is:**
+      - **The log-reachable code part — tested for real, the same way
+        as everything else this session:** isolated repo, two agent
+        commits. `KIRO_AGENT_COMMIT=1` alone logged
+        `hook_status=pre-commit-refresh-confirmed-via-chat` (regression
+        check, unaffected). `KIRO_AGENT_COMMIT=1
+        KIRO_AGENT_COMMIT_UNCONFIRMED=1` logged the new, distinct
+        `hook_status=pre-commit-refresh-confirmed-via-chat-unconfirmed`
+        line. `bash -n` syntax-checked after the edit.
+      - **The behavioral part — this cannot be pty-scripted or run in
+        an isolated repo the way hook code can; it requires an actual
+        multi-turn chat exchange with a real reply cadence.** Per the
+        request's own test protocol, this needs to be run live: ask to
+        commit, receive two genuinely unrelated replies, confirm the
+        third unanswered attempt actually triggers the fallback rather
+        than asking forever. That live run is happening in this same
+        session, immediately after this entry — see the conversation
+        itself for the real transcript, not a description of one.
+        **Same honesty standard as the profile-click chat mechanism
+        this extends:** this is implemented-but-behavioral, not
+        code-enforced — nothing stops a future agent turn from just
+        asking a 4th, 5th, 6th time instead of following this rule, the
+        same honest limit already stated for CASE B's base mechanism.

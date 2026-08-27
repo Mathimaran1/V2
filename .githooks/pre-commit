@@ -38,7 +38,7 @@ fi
 # 1. Check for passwords/keys first — stops the commit if it finds any
 gitleaks protect --staged || exit 1
 
-# 2. Find the ticket ID: saved file -> branch name -> ask in terminal
+# 2. Find the ticket ID: saved file, or defer entirely to Kiro chat
 TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
 SOURCE="kiro_session"
 
@@ -49,83 +49,75 @@ SOURCE="kiro_session"
 # real atlassian-rovo MCP connection — see
 # aidlc-ask-for-ticket-if-missing.json — so it's not re-checked here.
 #
-# branch_name and manual_entry USED to validate themselves via a
-# validate_jira_ticket() that called Jira's REST API directly with
-# JIRA_BASE_URL/EMAIL/API_TOKEN — removed 2026-08-27 (manual_entry and
-# the post-commit switch prompt first, branch_name here last) after
-# confirming those env vars are provisioned nowhere in this repo, so
-# that function could only ever hit its own "no credential configured"
-# branch and accept anything unvalidated — a real ticket and a made-up
-# one were indistinguishable (confirmed live: "ZZZZ-99999" was accepted
-# exactly like a real ticket in the switch flow — see TODO.md). This is
-# a plain git hook, not Kiro's agent, and genuinely cannot reuse Kiro's
-# own atlassian-rovo OAuth session either (confirmed by inspecting
-# state.vscdb: the token/client/verifier secrets there are Electron
-# safeStorage-encrypted, gated behind gnome-keyring). Rather than
-# provision a second Jira credential just for this hook, branch_name
-# now defers to Kiro chat's already-working MCP connection the same way
-# manual_entry and the switch prompt do — see below.
+# Branch-name ticket guessing — REMOVED 2026-08-27 (same day it was
+# switched to the pending-ticket-check deferral pattern, then removed
+# outright shortly after). It was a second, easy-to-forget code path
+# for the exact same "can't actually validate here" problem the old
+# terminal-prompt fallback already had, and guessing a ticket ID from a
+# branch name at all — even deferred, even honestly labeled
+# `branch_name` in the tracking data — was judged more confusing than
+# useful now that nothing here can validate it anyway. There is no more
+# `branch_name` value anywhere in this system. Terminal manual entry
+# was itself removed the same way shortly after that (see below) —
+# ticket resolution now goes through Kiro chat only
+# (`SOURCE=kiro_session`), or `SOURCE=unset` when nothing's been set
+# yet, deferred to chat either way. See TODO.md for the full reasoning
+# and the shared history behind both removals.
 if [ -z "$TICKET_ID" ]; then
-  TICKET_ID=$(git branch --show-current | grep -oE '^[A-Z]+-[0-9]+')
-  SOURCE="branch_name"
-  if [ -n "$TICKET_ID" ]; then
-    TYPED_TICKET="$TICKET_ID"
+  # Interactive terminal prompt (`read -p "No ticket found. Enter
+  # ticket ID..."`) REMOVED 2026-08-27 — a real design gap found
+  # through live testing, not just a style preference: it produced a
+  # confusing double-ask (Kiro chat's CASE A already asks the same
+  # question) and outright hung/got interrupted when a commit ran in a
+  # non-interactive context (an agent's tool execution) with nothing
+  # able to answer it — exactly the same class of "who's actually there
+  # to answer this" problem the profile-click prompt and the ticket-
+  # switch prompt each had to solve with a TTY/`$KIRO_AGENT_COMMIT`
+  # check, except here the honest fix is simpler: don't ask at all.
+  # Kiro chat is now the ONLY place a ticket ever gets set — this hook
+  # just tracks the commit as "none" (the same honest bucket already
+  # used for genuinely untracked work) and flags that a ticket is owed,
+  # exactly like manual_entry's deferral already did for a typed value,
+  # just with nothing typed to hand over. `.kiro/pending-ticket-check.json`
+  # existing with no `typed_ticket` is not new state the ask-ticket hook
+  # needs special handling for beyond deleting it — `current-ticket.json`
+  # is still empty either way, and CASE A already asks in exactly that
+  # situation, unconditionally, with or without this file. Never blocks
+  # the commit.
+  SOURCE="unset"
+  # BUG FOUND AND FIXED 2026-08-27, same day as the removal above: this
+  # write used to unconditionally overwrite .kiro/pending-ticket-check.json
+  # every time — including with this null flag, clobbering a REAL
+  # typed_ticket from an earlier post-commit switch that Kiro chat
+  # hadn't validated yet. Reproduced directly: a switch to a real
+  # ticket got silently erased by the very next commit's "nothing was
+  # typed" flag before it was ever checked against Jira (see TODO.md).
+  # A null overwriting a null, or a real value overwriting another real
+  # value ("most recent switch wins"), were always an accepted
+  # trade-off of this being a single file, not a queue — see TODO.md's
+  # reasoning for staying with a single file rather than one. But a
+  # null overwriting a REAL value is a straight information loss with
+  # nothing gained, so: check for an existing real typed_ticket first,
+  # and leave it completely untouched if one's there — this commit
+  # still tracks as "none" either way, only the pending-file write is
+  # skipped.
+  EXISTING_PENDING_TICKET=""
+  if [ -f .kiro/pending-ticket-check.json ]; then
+    EXISTING_PENDING_TICKET=$(jq -r '.typed_ticket // empty' .kiro/pending-ticket-check.json 2>/dev/null)
+  fi
+  if [ -n "$EXISTING_PENDING_TICKET" ]; then
+    echo "ℹ️  No ticket set for this commit — tracking it as 'none'. A real ticket" >&2
+    echo "   ('$EXISTING_PENDING_TICKET') is already awaiting validation from an earlier" >&2
+    echo "   commit — leaving it untouched rather than overwriting it with nothing." >&2
+  else
     mkdir -p .kiro
     cat > .kiro/pending-ticket-check.json << INNER_EOF
-{"typed_ticket": "$TYPED_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"typed_ticket": null, "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 INNER_EOF
-    echo "⚠️  Can't validate '$TYPED_TICKET' (from branch name) against Jira from a terminal" >&2
-    echo "   hook (no credential configured at this level). Tracking this commit as 'none'" >&2
-    echo "   for now — tell Kiro about '$TYPED_TICKET' in your next chat message and it'll" >&2
-    echo "   validate via the real Jira connection and apply it going forward." >&2
-    TICKET_ID="none"
+    echo "ℹ️  No ticket set for this commit — tracking it as 'none'. Kiro chat will ask" >&2
+    echo "   which ticket you're working on next time you send a message." >&2
   fi
-fi
-
-if [ -z "$TICKET_ID" ]; then
-  read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID < /dev/tty
-  SOURCE="manual_entry"
-  # 2026-08-27: stopped trusting a typed ticket ID directly here.
-  # validate_jira_ticket() at this call site can only ever hit the
-  # "skipped-no-credential" branch — JIRA_BASE_URL/EMAIL/API_TOKEN are
-  # not provisioned anywhere in this repo (confirmed by checking the
-  # environment directly, not assumed) — so it always returned success
-  # unvalidated, meaning a typed ticket and a made-up one were
-  # indistinguishable at this point (confirmed live: "ZZZZ-99999" was
-  # accepted exactly like a real ticket — see TODO.md). Kiro chat's own
-  # ask-ticket hook DOES have real, working Jira access via the
-  # atlassian-rovo MCP connection — so defer to that instead of
-  # pretending this hook can validate anything: track this commit
-  # under "none" (the same honest bucket already used for genuinely
-  # untracked work) and hand the typed value to Kiro chat to check for
-  # real on the next message. Never blocks the commit either way.
-  if [ -n "$TICKET_ID" ] && [ "$TICKET_ID" != "none" ]; then
-    TYPED_TICKET="$TICKET_ID"
-    mkdir -p .kiro
-    cat > .kiro/pending-ticket-check.json << INNER_EOF
-{"typed_ticket": "$TYPED_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-INNER_EOF
-    echo "⚠️  Can't validate '$TYPED_TICKET' against Jira from a terminal hook (no credential" >&2
-    echo "   configured at this level). Tracking this commit as 'none' for now — tell Kiro" >&2
-    echo "   about '$TYPED_TICKET' in your next chat message and it'll validate via the real" >&2
-    echo "   Jira connection and apply it going forward." >&2
-    TICKET_ID="none"
-  fi
-fi
-
-# Fail closed, not silently: hit for real (see TODO.md) — a blank read
-# (no TTY in an automated context, or a human hitting Enter blank) used
-# to sail through and write a malformed record ("ticket_id": "", filename
-# starting with "-"). Same posture as the gitleaks check above: block the
-# commit rather than write bad tracking data.
-if [ -z "$TICKET_ID" ]; then
-  echo "❌ No ticket ID resolved — not saved in .kiro/current-ticket.json," >&2
-  echo "   branch name didn't match a ticket pattern, and nothing was" >&2
-  echo "   entered at the prompt. Commit blocked rather than writing a" >&2
-  echo "   malformed tracking record. Answer Kiro's ticket question first," >&2
-  echo "   name your branch TICKET-123-..., or re-run and type a real" >&2
-  echo "   ticket ID (or 'none') at the prompt." >&2
-  exit 1
+  TICKET_ID="none"
 fi
 
 # 2b. Ask-to-click gate — CASE A / CASE C of the three-way split
@@ -152,8 +144,25 @@ if [ -n "$KIRO_AGENT_COMMIT" ]; then
   # Permission was already handled in chat before this commit was run —
   # do NOT also prompt the terminal (there's likely no one watching it
   # even when one is attached, per the bug above).
+  #
+  # $KIRO_AGENT_COMMIT_UNCONFIRMED, added 2026-08-27: the chat-based
+  # profile-click question has no real timeout (chat has no equivalent
+  # of this file's own `read -t 300` below — Kiro cannot act after a
+  # period of silence, only in response to a message), so the steering
+  # doc's fallback is count-based instead: ask up to 3 times, and if
+  # the 3rd reply still isn't a clear confirmation, proceed anyway but
+  # set this second env var alongside $KIRO_AGENT_COMMIT so it's
+  # distinguishable in this log from a commit that was actually
+  # confirmed on the first try — the one piece of that behavioral rule
+  # that IS reachable from here, unlike the ticket-switch question
+  # (which resolves in chat with no hook invocation happening at that
+  # moment to log anything into).
   mkdir -p .kiro-tracking
-  echo "hook_status=pre-commit-refresh-confirmed-via-chat ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+  if [ -n "$KIRO_AGENT_COMMIT_UNCONFIRMED" ]; then
+    echo "hook_status=pre-commit-refresh-confirmed-via-chat-unconfirmed ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+  else
+    echo "hook_status=pre-commit-refresh-confirmed-via-chat ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) branch=$(git branch --show-current)" >> .kiro-tracking/hook-health.log
+  fi
 elif { : < /dev/tty; } 2>/dev/null; then
   # CASE A (TTY present, e.g. a human typing `git commit` directly): ask
   # them to click their profile icon and refresh their credits BEFORE

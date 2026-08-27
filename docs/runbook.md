@@ -228,34 +228,26 @@ fi
 # 1. Check for passwords/keys first — stops the commit if it finds any
 gitleaks protect --staged || exit 1
 
-# 2. Find the ticket ID: saved file -> branch name -> ask in terminal
+# 2. Find the ticket ID: saved file, or defer entirely to Kiro chat.
+# Branch-name ticket guessing removed 2026-08-27 — one fewer code path
+# for a ticket ID nothing here could actually validate anyway. The
+# interactive terminal prompt itself was removed the same day, shortly
+# after — it double-asked what Kiro chat's CASE A already asks, and
+# hung when a commit ran non-interactively (an agent's tool execution)
+# with nothing able to answer it. `SOURCE` now has exactly two possible
+# values: `kiro_session` (from current-ticket.json) or `unset`.
 TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
 SOURCE="kiro_session"
 
 if [ -z "$TICKET_ID" ]; then
-  TICKET_ID=$(git branch --show-current | grep -oE '^[A-Z]+-[0-9]+')
-  SOURCE="branch_name"
+  SOURCE="unset"
+  TICKET_ID="none"
 fi
 
-if [ -z "$TICKET_ID" ]; then
-  read -p "No ticket found. Enter ticket ID (or 'none'): " TICKET_ID
-  SOURCE="manual_entry"
-fi
-
-# Fail closed, not silently: hit for real (see TODO.md) — a blank read
-# (no TTY in an automated context, or a human hitting Enter blank) used
-# to sail through and write a malformed record ("ticket_id": "", filename
-# starting with "-"). Same posture as the gitleaks check above: block the
-# commit rather than write bad tracking data.
-if [ -z "$TICKET_ID" ]; then
-  echo "❌ No ticket ID resolved — not saved in .kiro/current-ticket.json," >&2
-  echo "   branch name didn't match a ticket pattern, and nothing was" >&2
-  echo "   entered at the prompt. Commit blocked rather than writing a" >&2
-  echo "   malformed tracking record. Answer Kiro's ticket question first," >&2
-  echo "   name your branch TICKET-123-..., or re-run and type a real" >&2
-  echo "   ticket ID (or 'none') at the prompt." >&2
-  exit 1
-fi
+# The old "fail closed on a blank read" block lived here — removed
+# 2026-08-27 along with the terminal prompt above, since TICKET_ID can
+# no longer come out empty at this point (it's always either the saved
+# value or "none").
 
 # 3. Get credit numbers from the real local sources (no kiro-session-info —
 #    that command doesn't exist; confirmed by inspecting the actual files):

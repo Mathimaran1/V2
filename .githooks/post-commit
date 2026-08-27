@@ -9,17 +9,40 @@
 # looks the same regardless of which case created it: 'ep_' + hex
 # unix-timestamp + 3 random hex bytes.
 
-# TTY availability check: NOT `[ -t 0 ]`. Confirmed by testing (see
-# TODO.md) that stdin is not a reliable signal here either way — a real
-# human-typed `git commit` in an actual interactive terminal STILL shows
-# `[ -t 0 ]` as false for this hook's stdin (same root cause pre-commit
-# already hit and worked around). The only signal that was actually true
-# for the human case and actually false for a script/agent running
-# `git commit` as a subprocess with no controlling terminal at all is
-# whether /dev/tty itself is openable — it fails outright (ENXIO) when
-# there's no controlling terminal, which is exactly the no-TTY case this
-# guards against.
-if { : < /dev/tty; } 2>/dev/null; then
+# BUG FOUND AND FIXED 2026-08-27: this hook never checked
+# $KIRO_AGENT_COMMIT — the same "TTY existing doesn't mean CASE A"
+# mistake pre-commit already found and fixed in its own profile-click
+# prompt (see pre-commit's 2026-08-26 comment on this). An agent's own
+# tool-execution shell can have a real TTY attached, so the plain
+# `{ : < /dev/tty; }` check below succeeded even for a
+# `KIRO_AGENT_COMMIT=1` commit — real incident, confirmed: this
+# question got dumped into a chat transcript as inert, unanswerable
+# text after a commit the user had already approved in chat. Checked
+# first, same priority order as pre-commit: agent-marked takes
+# precedence over TTY presence.
+#
+# TTY availability check below: NOT `[ -t 0 ]`. Confirmed by testing
+# (see TODO.md) that stdin is not a reliable signal here either way —
+# a real human-typed `git commit` in an actual interactive terminal
+# STILL shows `[ -t 0 ]` as false for this hook's stdin (same root
+# cause pre-commit already hit and worked around). The only signal
+# that was actually true for the human case and actually false for a
+# script/agent running `git commit` as a subprocess with no
+# controlling terminal at all is whether /dev/tty itself is openable —
+# it fails outright (ENXIO) when there's no controlling terminal.
+if [ -n "$KIRO_AGENT_COMMIT" ]; then
+  # This commit was already approved in chat, but the SWITCH question
+  # is a separate ask, about the ticket for whatever comes NEXT — it
+  # was never answered and cannot be asked here either (same
+  # dumped-into-transcript failure mode). Per
+  # aidlc-git-conventions.md's CASE B chat-based counterpart, the
+  # agent asks this directly in chat as its next message after a
+  # KIRO_AGENT_COMMIT=1 commit succeeds — this hook does not, and must
+  # not, attempt it.
+  HAS_TTY=0
+  mkdir -p .kiro-tracking
+  echo "hook_status=post-commit-switch-check-skipped-agent-commit ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse HEAD)" >> .kiro-tracking/hook-health.log
+elif { : < /dev/tty; } 2>/dev/null; then
   HAS_TTY=1
 else
   HAS_TTY=0
