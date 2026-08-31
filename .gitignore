@@ -1,12 +1,24 @@
 # Local Kiro session state — never shared, resets per branch
 .kiro/current-ticket.json
 
-# A ticket typed at the terminal (pre-commit's manual-entry fallback, or
-# post-commit's ticket-switch prompt) that couldn't be validated against
-# Jira at the git-hook level (no credential there) — Kiro chat's
-# ask-ticket hook checks it for real via atlassian-rovo MCP on the next
-# message, then deletes this file. See TODO.md, 2026-08-27.
+# A ticket typed at post-commit's ticket-switch prompt that couldn't be
+# validated against Jira at the git-hook level (no credential there) —
+# Kiro chat's ask-ticket hook checks it for real via atlassian-rovo MCP
+# on the next message, then deletes this file. (pre-commit's own
+# manual-entry fallback, which used to write this too, was removed
+# entirely 2026-08-27 — it no longer prompts the terminal at all.)
+# See TODO.md, 2026-08-27.
 .kiro/pending-ticket-check.json
+
+# Same category as pending-ticket-check.json above — a transient marker
+# the ask-ticket hook writes while mid a "did you mean X?" or "please
+# refresh credits" sub-dialogue, so the fast-path command hook knows to
+# stand down. Deleted by the agent hook once that sub-flow concludes.
+# Added 2026-08-31 alongside the marker itself — this .gitignore entry
+# was missing from that same change until this repo-verification pass
+# caught it (confirmed live: nothing else ignored it, so it could have
+# been committed by an ordinary `git add -A` mid-conversation).
+.kiro/pending-baseline-confirm.json
 
 # Sonar scan scratch output
 /tmp/sonar-scan.log

@@ -5,7 +5,16 @@
 # commit happens to be clean." A per-USER marker (not per-repo), since
 # consent is about the person, not any one project — versioned so a
 # future change to what's tracked can force a re-prompt by bumping it.
-CONSENT_VERSION="v2"
+#
+# Read from .kiro/consent-version, not hardcoded here — this same
+# string used to be duplicated identically across pre-commit, pre-push,
+# and post-checkout (three separate places to edit, easy to miss one on
+# a real bump, exactly as happened going v1→v2). Single source of
+# truth now; bumping .kiro/consent-version alone forces a re-prompt
+# everywhere. A missing/unreadable file yields an empty string, which
+# never matches a real "v#|..." marker line below — fails open to
+# re-asking, not open to silently skipping consent.
+CONSENT_VERSION=$(cat .kiro/consent-version 2>/dev/null | tr -d '[:space:]')
 CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
 if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
   echo "" >&2
@@ -38,8 +47,13 @@ fi
 # 1. Check for passwords/keys first — stops the commit if it finds any
 gitleaks protect --staged || exit 1
 
-# 2. Find the ticket ID: saved file, or defer entirely to Kiro chat
+# 2. Find the ticket ID: saved file, or block the commit entirely
 TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
+# Always "kiro_session" now — `branch_name`, `manual_entry`, and `unset`
+# were the only other values this ever took, and all three were removed
+# entirely across 2026-08-27 (see the block below and TODO.md). Kept as
+# a named field, not hardcoded inline, since `Kiro-Source` is still a
+# real trailer field elsewhere in this file and in commit-msg.
 SOURCE="kiro_session"
 
 # Jira ticket-existence validation (EXISTENCE only, not assignment —
@@ -49,75 +63,34 @@ SOURCE="kiro_session"
 # real atlassian-rovo MCP connection — see
 # aidlc-ask-for-ticket-if-missing.json — so it's not re-checked here.
 #
-# Branch-name ticket guessing — REMOVED 2026-08-27 (same day it was
-# switched to the pending-ticket-check deferral pattern, then removed
-# outright shortly after). It was a second, easy-to-forget code path
-# for the exact same "can't actually validate here" problem the old
-# terminal-prompt fallback already had, and guessing a ticket ID from a
-# branch name at all — even deferred, even honestly labeled
-# `branch_name` in the tracking data — was judged more confusing than
-# useful now that nothing here can validate it anyway. There is no more
-# `branch_name` value anywhere in this system. Terminal manual entry
-# was itself removed the same way shortly after that (see below) —
-# ticket resolution now goes through Kiro chat only
-# (`SOURCE=kiro_session`), or `SOURCE=unset` when nothing's been set
-# yet, deferred to chat either way. See TODO.md for the full reasoning
-# and the shared history behind both removals.
+# POLICY REVERSAL, 2026-08-27: "no ticket = track as 'none' and let the
+# commit through" is REMOVED ENTIRELY. Every prior design in this
+# section's history (branch-name guessing, the terminal manual-entry
+# prompt, the null-flag pending-check deferral that replaced it) was
+# some flavor of "let the commit through unticketed, sort it out
+# later." This is the opposite decision: no ticket, no commit, full
+# stop, no exceptions. `.kiro/pending-ticket-check.json`'s `typed_ticket:
+# null` shape (the "nothing typed, ticket owed" flag) no longer exists
+# either — there's nothing to defer once the commit itself is blocked
+# outright. The shape-1 pending-check flow (a REAL typed value from
+# post-commit's switch prompt, awaiting Jira validation) is unaffected
+# and still deferred the same way — this reversal only removes the
+# "commit anyway under none" escape hatch, not ticket validation itself.
+#
+# MIDDLE GROUND, same day: "none" was restored as a valid, EXPLICIT
+# ticket_id value shortly after this reversal (see
+# aidlc-ask-for-ticket-if-missing.json's CASE A1 and post-commit's
+# switch flow) — but only as something a user actively chooses through
+# Kiro chat or the switch prompt, written into current-ticket.json just
+# like a real ticket. This block below needs no change for that: once
+# "none" is chosen, TICKET_ID is the non-empty string "none", not
+# empty, so it sails through here exactly like a real ticket would.
+# This block only ever fires when NOTHING has been chosen at all yet.
 if [ -z "$TICKET_ID" ]; then
-  # Interactive terminal prompt (`read -p "No ticket found. Enter
-  # ticket ID..."`) REMOVED 2026-08-27 — a real design gap found
-  # through live testing, not just a style preference: it produced a
-  # confusing double-ask (Kiro chat's CASE A already asks the same
-  # question) and outright hung/got interrupted when a commit ran in a
-  # non-interactive context (an agent's tool execution) with nothing
-  # able to answer it — exactly the same class of "who's actually there
-  # to answer this" problem the profile-click prompt and the ticket-
-  # switch prompt each had to solve with a TTY/`$KIRO_AGENT_COMMIT`
-  # check, except here the honest fix is simpler: don't ask at all.
-  # Kiro chat is now the ONLY place a ticket ever gets set — this hook
-  # just tracks the commit as "none" (the same honest bucket already
-  # used for genuinely untracked work) and flags that a ticket is owed,
-  # exactly like manual_entry's deferral already did for a typed value,
-  # just with nothing typed to hand over. `.kiro/pending-ticket-check.json`
-  # existing with no `typed_ticket` is not new state the ask-ticket hook
-  # needs special handling for beyond deleting it — `current-ticket.json`
-  # is still empty either way, and CASE A already asks in exactly that
-  # situation, unconditionally, with or without this file. Never blocks
-  # the commit.
-  SOURCE="unset"
-  # BUG FOUND AND FIXED 2026-08-27, same day as the removal above: this
-  # write used to unconditionally overwrite .kiro/pending-ticket-check.json
-  # every time — including with this null flag, clobbering a REAL
-  # typed_ticket from an earlier post-commit switch that Kiro chat
-  # hadn't validated yet. Reproduced directly: a switch to a real
-  # ticket got silently erased by the very next commit's "nothing was
-  # typed" flag before it was ever checked against Jira (see TODO.md).
-  # A null overwriting a null, or a real value overwriting another real
-  # value ("most recent switch wins"), were always an accepted
-  # trade-off of this being a single file, not a queue — see TODO.md's
-  # reasoning for staying with a single file rather than one. But a
-  # null overwriting a REAL value is a straight information loss with
-  # nothing gained, so: check for an existing real typed_ticket first,
-  # and leave it completely untouched if one's there — this commit
-  # still tracks as "none" either way, only the pending-file write is
-  # skipped.
-  EXISTING_PENDING_TICKET=""
-  if [ -f .kiro/pending-ticket-check.json ]; then
-    EXISTING_PENDING_TICKET=$(jq -r '.typed_ticket // empty' .kiro/pending-ticket-check.json 2>/dev/null)
-  fi
-  if [ -n "$EXISTING_PENDING_TICKET" ]; then
-    echo "ℹ️  No ticket set for this commit — tracking it as 'none'. A real ticket" >&2
-    echo "   ('$EXISTING_PENDING_TICKET') is already awaiting validation from an earlier" >&2
-    echo "   commit — leaving it untouched rather than overwriting it with nothing." >&2
-  else
-    mkdir -p .kiro
-    cat > .kiro/pending-ticket-check.json << INNER_EOF
-{"typed_ticket": null, "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-INNER_EOF
-    echo "ℹ️  No ticket set for this commit — tracking it as 'none'. Kiro chat will ask" >&2
-    echo "   which ticket you're working on next time you send a message." >&2
-  fi
-  TICKET_ID="none"
+  echo "❌ No ticket set for this work. Please open Kiro chat and tell it" >&2
+  echo "   which ticket you're working on before committing. Every commit" >&2
+  echo "   requires a real ticket — there are no exceptions." >&2
+  exit 1
 fi
 
 # 2b. Ask-to-click gate — CASE A / CASE C of the three-way split
@@ -239,6 +212,29 @@ CACHE_TIMESTAMP_MS=$(echo "$CREDITS_RESULT" | sed -n '2p')
 CREDITS_START=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.credits_at_ticket_start // empty')
 EPISODE_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_id // empty')
 
+# 3d. Time tracking, added 2026-08-28 — same pattern as credits: a fixed
+# start value (episode_started_at, written once when the episode began —
+# see aidlc-ask-for-ticket-if-missing.json's CASE A1/C1 and post-commit's
+# switch-to-none branch) plus a recalculated-per-commit current value
+# (elapsed minutes, computed fresh here every commit, the same way
+# CREDITS_DELTA above is recalculated fresh every commit against the
+# fixed credits_at_ticket_start). `date -d` (GNU date) parses the ISO
+# 8601 UTC string back into epoch seconds for the subtraction — this
+# machine's `date` is GNU coreutils, confirmed by every other `date -u`
+# call already in this file working correctly.
+EPISODE_STARTED_AT=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_started_at // empty')
+ELAPSED_MINUTES="null"
+if [ -n "$EPISODE_STARTED_AT" ]; then
+  EPISODE_START_EPOCH=$(date -u -d "$EPISODE_STARTED_AT" +%s 2>/dev/null)
+  if [ -n "$EPISODE_START_EPOCH" ]; then
+    ELAPSED_MINUTES=$(awk -v now="$(date +%s)" -v start="$EPISODE_START_EPOCH" 'BEGIN{printf "%.2f", (now-start)/60}')
+  fi
+fi
+# A missing or unparseable episode_started_at (e.g. a current-ticket.json
+# baseline set before this field existed) is expected, not an error —
+# same "null" convention CREDITS_DELTA already uses above, resolved to
+# "n/a" by commit-msg the same way.
+
 # Credits are decimals (e.g. 229.72) — bash's $(( )) only does integers and
 # would silently truncate/break here, so use awk for the subtraction instead.
 CREDITS_DELTA="null"
@@ -318,6 +314,14 @@ else
   EPISODE_ID_JSON="null"
 fi
 
+# Same null-quoting pattern for episode_started_at (2026-08-28) — will
+# genuinely be empty for any baseline set before this field existed.
+if [ -n "$EPISODE_STARTED_AT" ]; then
+  EPISODE_STARTED_AT_JSON="\"$EPISODE_STARTED_AT\""
+else
+  EPISODE_STARTED_AT_JSON="null"
+fi
+
 # 4. Hand the trailer values to commit-msg — no intermediate JSON file.
 # REMOVED 2026-08-27: this used to write a brand-new
 # ".kiro-tracking/${TICKET_ID}-$(date +%s).json" file EVERY commit and
@@ -342,6 +346,8 @@ KIRO_SESSION_ID="$SESSION_ID"
 KIRO_CREDITS_DELTA="$CREDITS_DELTA"
 KIRO_CREDIT_CONFIDENCE="$CREDIT_CONFIDENCE"
 KIRO_EPISODE_ID="$EPISODE_ID"
+KIRO_EPISODE_STARTED_AT="$EPISODE_STARTED_AT"
+KIRO_ELAPSED_MINUTES="$ELAPSED_MINUTES"
 INNER_EOF
 
 # 4b. Optional debug convenience copy — ONE file per ticket, overwritten
@@ -361,6 +367,8 @@ cat > "$DEBUG_FILE" << INNER_EOF
   "credits_used_so_far": $CREDITS_DELTA,
   "credit_confidence": "$CREDIT_CONFIDENCE",
   "episode_id": $EPISODE_ID_JSON,
+  "episode_started_at": $EPISODE_STARTED_AT_JSON,
+  "elapsed_minutes": $ELAPSED_MINUTES,
   "dev": "$(git config user.email)",
   "branch": "$(git branch --show-current)",
   "commit_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

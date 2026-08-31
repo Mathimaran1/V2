@@ -79,13 +79,20 @@ fi
 # validation is deferred there instead of pretended here — see below.
 
 if [ "$HAS_TTY" = "1" ] && { [ "$SWITCH_ANSWER" = "y" ] || [ "$SWITCH_ANSWER" = "Y" ]; }; then
+  # RESTORED 2026-08-27 (middle-ground policy, same day it was removed):
+  # "none" is a valid, explicit answer again — but it must be an ACTIVE
+  # choice made right here, never a silent default. It's not a claim
+  # about a real Jira ticket, so there's nothing to validate for it
+  # specifically — it goes through its own confirmation below (a real
+  # baseline + episode, written immediately, same as a real ticket would
+  # be), not silently. A real typed value still can't be validated from
+  # a terminal hook (same gap as before — see TODO.md) and is still
+  # deferred to Kiro chat's real atlassian-rovo MCP connection.
   read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty
   if [ -n "$NEW_TICKET" ] && [ "$NEW_TICKET" != "none" ]; then
-    # Can't validate against Jira from a terminal hook (same gap as
-    # pre-commit's manual-entry fallback — see its comments). Don't
-    # switch yet: leave current-ticket.json on the OLD ticket, and hand
-    # the typed value to Kiro chat's ask-ticket hook to check for real
-    # via atlassian-rovo MCP on the user's next message.
+    # Don't switch yet: leave current-ticket.json on the OLD ticket, and
+    # hand the typed value to Kiro chat's ask-ticket hook to check for
+    # real via atlassian-rovo MCP on the user's next message.
     mkdir -p .kiro
     cat > .kiro/pending-ticket-check.json << INNER_EOF
 {"typed_ticket": "$NEW_TICKET", "flagged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
@@ -95,8 +102,20 @@ INNER_EOF
     echo "   Tell Kiro about '$NEW_TICKET' in your next chat message and it'll validate via" >&2
     echo "   the real Jira connection and switch retroactively." >&2
   elif [ "$NEW_TICKET" = "none" ]; then
-    # "none" isn't a claim about a real Jira ticket, so there's nothing
-    # to validate — switch immediately, same as before.
+    # An explicit, deliberate choice — not a silent fallback. "none"
+    # isn't a claim about a real Jira ticket, so there's nothing to
+    # validate; switch immediately, with a real baseline/episode and an
+    # explicit confirmation message, exactly like a real ticket would
+    # get.
+    #
+    # Time tracking, added 2026-08-28 — same pattern as credits: a
+    # fixed start value (episode_started_at, captured once here,
+    # alongside credits_at_ticket_start) plus a recalculated-per-commit
+    # current value (pre-commit computes elapsed minutes fresh every
+    # commit, same way it recomputes the credit delta). The timestamp
+    # is read in the SAME python process as the credit baseline, not a
+    # separate `date` call after the fact, so both halves of "this
+    # episode's starting point" are captured at the same instant.
     RESULT=$(python3 -c "
 import sqlite3, json, os, time, secrets
 con = sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb'))
@@ -106,12 +125,15 @@ val = val.decode('utf-8') if isinstance(val, bytes) else val
 usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
 print(usage)
 print('ep_' + format(int(time.time()), 'x') + secrets.token_hex(3))
+print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
 " 2>/dev/null)
     CREDITS_NOW=$(echo "$RESULT" | sed -n '1p')
     NEW_EPISODE=$(echo "$RESULT" | sed -n '2p')
-    if [ -n "$CREDITS_NOW" ] && [ -n "$NEW_EPISODE" ]; then
-      echo "{\"ticket_id\": \"$NEW_TICKET\", \"credits_at_ticket_start\": $CREDITS_NOW, \"episode_id\": \"$NEW_EPISODE\"}" > .kiro/current-ticket.json
-      echo "✅ Switched to $NEW_TICKET — new episode $NEW_EPISODE, baseline $CREDITS_NOW credits." >&2
+    EPISODE_STARTED_AT=$(echo "$RESULT" | sed -n '3p')
+    if [ -n "$CREDITS_NOW" ] && [ -n "$NEW_EPISODE" ] && [ -n "$EPISODE_STARTED_AT" ]; then
+      echo "{\"ticket_id\": \"none\", \"credits_at_ticket_start\": $CREDITS_NOW, \"episode_id\": \"$NEW_EPISODE\", \"episode_started_at\": \"$EPISODE_STARTED_AT\"}" > .kiro/current-ticket.json
+      echo "✅ Switched to 'none' — new episode $NEW_EPISODE, baseline $CREDITS_NOW credits, started $EPISODE_STARTED_AT." >&2
+      echo "   Tracked explicitly as no-ticket work, not a silent default." >&2
     else
       echo "⚠️  Could not read the current credit baseline — NOT switching, current-ticket.json left untouched." >&2
     fi

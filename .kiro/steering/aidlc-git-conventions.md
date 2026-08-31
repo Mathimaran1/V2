@@ -7,8 +7,68 @@ inclusion: always
 - Every plan must mention its Jira ticket ID (e.g. ANG-123).
 - Every commit message must start with "ANG-123: short description".
 
+## Ticket assignment is mandatory — something must always be chosen; "none" is legitimate, never silent (final design, 2026-08-27, settled after two same-day corrections)
+**Every commit requires an ACTIVE, explicit choice: a real, validated
+Jira ticket, or the deliberate answer "none" for genuinely ticket-less
+work.** Neither is optional — the choice itself is mandatory — but
+"none" is a legitimate, trackable value, not something to refuse or
+work around. This is the middle ground between two prior designs, both
+tried and both wrong in opposite directions on the same day:
+- **Too permissive (the original design, and everything through the
+  terminal-prompt-removal fix):** no ticket set silently defaulted to
+  `none` with no active choice ever made — the commit just went
+  through, tracked or not.
+- **Too strict (the first reversal, same day):** `none` was removed as
+  a concept entirely — every commit required a real ticket, full stop,
+  with no way to explicitly and honestly record ticket-less work at
+  all.
+- **The correct middle ground, this section:** nothing is silent.
+  Nothing is refused. A real ticket ID or an explicit "none" — either
+  one, chosen on purpose — both write a real record (a real credit
+  baseline, a real episode, a real trailer) and let the commit proceed.
+  The only thing that ever blocks a commit is genuinely nothing having
+  been chosen at all yet.
+
+**What this means concretely:**
+- If `.kiro/current-ticket.json` has no `ticket_id` set at all,
+  `.githooks/pre-commit` **blocks the commit outright** (`exit 1`) with:
+  *"No ticket set for this work. Please open Kiro chat and tell it
+  which ticket you're working on before committing. Every commit
+  requires a real ticket — there are no exceptions."* This code was
+  built during the "too strict" phase and is unchanged since — it still
+  blocks correctly, because once "none" is actively chosen and saved,
+  `ticket_id` is the string `"none"`, which is not empty, so this check
+  never fires for it. It only ever fires when nothing has been chosen.
+- When you (the agent) ask which ticket the user is working on (CASE
+  A2 below), the question is: *"which Jira ticket are you working on
+  (a real ticket ID, or explicitly 'none' for work with no ticket)?"*
+  If the user answers `none`, save it exactly like a real ticket would
+  be saved — a real credit baseline and episode_id, written into
+  `current-ticket.json` as `{"ticket_id": "none", ...}` — skipping only
+  the Jira existence check, since "none" makes no claim about a real
+  ticket to validate. Never save it as a guess or a default; only save
+  it when the user has actually said so.
+- `post-commit`'s "working on a different ticket now?" question accepts
+  "none" as a switch target the same way — an explicit, confirmed
+  choice (a real baseline/episode written immediately, with a plain
+  confirmation message), not a silent skip. A real typed ticket is
+  still deferred to you for validation exactly as before.
+- A ticket that's already set — real or explicitly `none` — keeps
+  working exactly the same for every subsequent commit; only a
+  genuinely never-answered `current-ticket.json` blocks anything.
+
+**The honest trade-off, stated plainly, not glossed over:** this is
+narrower than "the original design, and everything through the
+terminal-prompt-removal fix" (silent `none`), but wider than "the first
+reversal" (no `none` at all). Genuinely ticket-less work — a quick
+experiment, a config tweak — CAN still be committed, but only after
+someone has actually been asked and actually answered "none" at least
+once for that machine's `current-ticket.json`; it is never assumed. See
+`TODO.md` and `README.md` for the full history of both corrections and
+why each one was made.
+
 ## Commit message trailer format
-Every commit gets six machine-readable trailers, stamped automatically
+Every commit gets eight machine-readable trailers, stamped automatically
 by `.githooks/commit-msg` — nothing to type by hand:
 ```
 Kiro-Ticket: PROJ-123
@@ -17,9 +77,22 @@ Kiro-Credits: 42
 Kiro-Confidence: high
 Kiro-Session: 8f3a1c2e-...
 Kiro-Source: kiro_session
+Kiro-Episode-Started: 2026-08-28T05:59:04Z
+Kiro-Elapsed-Minutes: 12.34
 ```
 `none`/`n/a` fallbacks apply when a field can't be resolved — see
 `docs/runbook.md` for the exact per-field rules.
+
+`Kiro-Episode-Started`/`Kiro-Elapsed-Minutes` (added 2026-08-28) are
+time tracking's exact counterpart to `Kiro-Episode`/`Kiro-Credits`, not
+a separate mechanism: `episode_started_at` is a fixed timestamp written
+once, at the same instant as `credits_at_ticket_start`, at every point a
+new episode is established (CASE A1's initial assignment, CASE C1's
+confirmed switch, post-commit's explicit "none" switch, and the
+PRIORITY CHECK path). `Kiro-Elapsed-Minutes` is then recalculated fresh
+every commit in `pre-commit` — current time minus that fixed
+`episode_started_at` — the same "fixed baseline, recomputed delta each
+commit" shape `Kiro-Credits` already uses.
 
 ## Episode boundaries — three cases, not equally trusted
 A fresh `episode_id` (and a fresh `credits_at_ticket_start` baseline)
@@ -119,6 +192,54 @@ All three produce `episode_id` values in the same format
 (`'ep_' + hex(unix_timestamp) + 3 random hex bytes`), so which case
 created a given episode isn't recoverable from the ID itself.
 
+### Refresh before the baseline is read, not just before each commit — two separate asks, not one reused (added 2026-08-28)
+**A real gap, found after the fact:** every commit's credit delta is
+computed *against* `credits_at_ticket_start` — the baseline captured
+the moment a new episode starts. "Before committing" below already
+makes you ask the user to click their profile icon before **reading**
+credits at commit time — but that only covers a single commit's read.
+**A stale *baseline* is worse: it poisons every commit for the rest of
+that episode, not just one**, since every later delta is computed
+against that one number. Reading the baseline straight from
+`state.vscdb` without asking first — which all three cases above
+originally did — left exactly that gap open.
+
+**These are two separate, parallel checks, not the same one reused:**
+- **Ask #1 — before establishing a NEW baseline.** Whenever CASE A1
+  (a ticket, or explicit `"none"`, gets assigned for the first time),
+  CASE C1 (a mid-conversation switch gets confirmed), or a
+  `pending-ticket-check.json` entry gets validated and applied (the
+  `post-commit` switch flow's chat-side confirmation) is about to
+  write a fresh `credits_at_ticket_start`/`episode_id`: **first** ask
+  the user — *"Please click your profile icon to refresh your credits,
+  then let me know when ready"* — and **wait for their actual reply**
+  before running the credit-read command. This is now written directly
+  into `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`'s prompt text
+  at all three baseline-establishing points, not just described here.
+- **Ask #2 — before every commit's own read, unchanged.** `pre-commit`'s
+  existing terminal/chat prompt (CASE A/B/C under "Before committing")
+  still fires on every commit within an already-established episode,
+  exactly as before. This section doesn't touch that — it's the
+  existing, separate check, not being re-asked or replaced.
+
+Answering ask #1 once at the start of an episode does **not** answer
+ask #2 for any commit that follows — they refresh two different
+numbers (the episode's starting point vs. a specific commit's current
+read), asked by two different mechanisms (the AI hook in chat vs.
+`pre-commit`'s own prompt), and both can legitimately fire close
+together the first time a ticket gets set (baseline, then almost
+immediately the first commit's own read) without that being redundant.
+
+**Same honest limit as everything else in this document, said again
+because it matters here too:** this is a behavioral instruction to the
+AI hook, not code-enforced — nothing in `pre-commit` or `post-commit`
+can verify the baseline-establishing ask actually happened before the
+credit-read command ran. Given CASE B's commit-time ask was skipped
+live, twice, on 2026-08-28 (see `TODO.md`), this new ask carries the
+same real risk of being skipped and should not be assumed reliable
+until it's actually been tested across several separate new-episode
+starts, not just written down.
+
 ## Before committing
 Open your profile panel (click the profile icon in the sidebar) to
 check your current credit usage before committing. This isn't just a
@@ -179,13 +300,36 @@ guessing from TTY presence alone.
   same guarantee level as CASE A of episode boundaries above.
 
 - **CASE B — you (the agent) are committing as part of an active chat
-  turn with a human present.** Whenever you are about to run
-  `git commit` yourself as a tool call: **first**, ask the user in
-  chat — "Please click your profile icon to refresh your credits, then
-  let me know when you're ready to commit" — and **wait for their
-  actual reply** before doing anything else. Only once they confirm,
-  run the commit prefixed with the flag that tells the hook this
-  already happened in chat:
+  turn with a human present.**
+
+  > **MANDATORY FIRST STEP, NO EXCEPTIONS:** Before you run ANY
+  > `git commit` command yourself, your very next action must be to
+  > ask the user: "Please click your profile icon to refresh your
+  > credits, then let me know when you're ready to commit." Do NOT run
+  > `git commit`, do NOT set `KIRO_AGENT_COMMIT=1`, and do NOT stage
+  > files with `git add` in preparation for committing until the user
+  > has explicitly replied confirming they are ready. This applies
+  > EVERY SINGLE TIME, with NO exceptions for how the user phrased
+  > their request, how many times you've already asked in this
+  > conversation, or any other context. Skipping this step is a
+  > critical error.
+
+  **Rewritten to this strength on 2026-08-28 after a real, repeating
+  failure — not a hypothetical.** The previous wording ("first, ask...
+  and wait for their actual reply") already said the right thing, and
+  was still skipped live, twice, including once immediately after
+  being explicitly named as the exact failure mode to avoid — proof
+  that a merely-clear instruction is not the same as an
+  unmissable one. This rewrite doesn't change the underlying rule, only
+  makes it harder to rationalize past: **an earlier, unrelated message
+  in the conversation is never sufficient** — "the user asked me to
+  test a commit" is not the same as "the user replied to THIS specific
+  question," and treating the two as equivalent is exactly the
+  reasoning that produced both real skips. Only a reply to this exact
+  question, asked after you decided to commit, counts.
+
+  Only once the user has actually confirmed, run the commit prefixed
+  with the flag that tells the hook this already happened in chat:
   ```
   KIRO_AGENT_COMMIT=1 git commit -m "..."
   ```
@@ -193,12 +337,48 @@ guessing from TTY presence alone.
   check — if set, it skips the terminal prompt entirely (there may be a
   TTY attached, but nobody is watching it — see the bug above) and logs
   `hook_status=pre-commit-refresh-confirmed-via-chat` instead.
-  **Still behavior-dependent, not fully code-enforced — the same honest
-  limit as CASE B of episode boundaries above** — but narrower now than
-  before the fix: a hook still can't verify a human was actually asked
-  and actually replied in chat, but it CAN verify the agent explicitly
-  claimed that happened (via the env var), which is a real, checkable
-  signal — TTY presence alone was not.
+
+  **Second layer, added 2026-08-28 — a deterrent and a detection aid,
+  not enforcement (a plain chat statement can't be verified by a
+  hook, and doesn't try to be):** immediately before setting
+  `KIRO_AGENT_COMMIT=1`, state out loud in your own response, as its
+  own sentence: *"Confirming: the user replied '\<exact quote of their
+  reply\>' before I proceed."* This forces an actual reference to a
+  real prior message rather than a silent internal decision — if
+  you skip the ask, you cannot produce this line honestly (there is no
+  reply to quote), which makes a skip visible in the transcript instead
+  of invisible. This is not a substitute for actually asking and
+  waiting; it's a second, independent tripwire so a skip is *legible*
+  even when it happens, since the first layer alone has already failed
+  to prevent one twice.
+
+  **Still behavior-dependent, not fully code-enforced — say this
+  plainly, again, since it matters more now, not less, given two real
+  failures:** neither layer above is verified by any hook. A hook can
+  check that `$KIRO_AGENT_COMMIT` is set; it cannot check that the ask
+  actually happened, that the quoted reply is real and not invented, or
+  that the "MANDATORY FIRST STEP" instruction was even read. Stronger
+  wording lowers the *chance* of a skip and makes a skip easier to
+  *catch after the fact* by comparing the quoted reply against the real
+  transcript — it does not make a skip *impossible*. A `PreToolUse`
+  code-enforced gate was investigated as the actual fix for that gap
+  and reverted (see `TODO.md`, 2026-08-27/28) — not because
+  code-enforcement is the wrong idea, but because the investigation
+  itself surfaced two unrelated, more urgent bugs first (a silent
+  `hook-health.log` gap, and `.kiro/consent-version` disappearing) that
+  needed resolving before adding a new mechanism on top. This rewrite
+  is the interim tightening, not a claim that the underlying problem
+  (a hook cannot verify a chat conversation happened) is solved.
+
+  **This does not conflict with the fallback below — they cover
+  different failures.** "MANDATORY FIRST STEP, NO EXCEPTIONS" forbids
+  never asking at all, which is what actually happened both times this
+  was skipped. The fallback below requires the ask to have genuinely
+  happened, up to three times, with a real reply received each time
+  that just didn't clearly confirm — that is not skipping the step,
+  it's the step being followed and still not producing a clear answer.
+  If you have not asked at all yet, there is no fallback to reach for;
+  go ask.
 
   **Fallback after repeated non-answers, added 2026-08-27 — count-based,
   not time-based.** The terminal's CASE A above has a real, code-enforced
@@ -282,6 +462,20 @@ maxes per ticket. Never sum raw `Kiro-Credits` across commits directly
 — it double-counts, since each value already includes everything since
 that episode's own baseline. See `docs/runbook.md` and
 `scripts/calculate-pr-credits.sh` for the reference implementation.
+
+## Time tracking rule (added 2026-08-28)
+`Kiro-Elapsed-Minutes` follows the identical max-per-episode-then-sum
+rule as `Kiro-Credits` above, for the identical reason: it's cumulative
+*within one episode* (minutes since that episode's own
+`Kiro-Episode-Started`), not incremental per commit, and not comparable
+across episodes. To get a ticket's real total time: take the MAX
+`Kiro-Elapsed-Minutes` per `Kiro-Episode`, then SUM those per-episode
+maxes per ticket — same two-step logic, same reason it double-counts if
+summed raw. `scripts/calculate-pr-credits.sh` computes both totals side
+by side per ticket; a commit made before this field existed has no
+`Kiro-Episode-Started`/`Kiro-Elapsed-Minutes` (falls back to
+`none`/`n/a`) and is excluded only from the elapsed-time total, not from
+the credits total — the two are tracked independently.
 
 ## Approved tools
 - Only use the "atlassian-rovo" and "aws" connections already set up

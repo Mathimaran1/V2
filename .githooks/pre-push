@@ -6,7 +6,12 @@
 # re-enabled. Never blocks a push over missing consent, just logs it —
 # see post-checkout for the same pattern and the reasoning in TODO.md,
 # 2026-08-26 "consent-in-every-hook" correction.
-CONSENT_VERSION="v2"
+#
+# Read from .kiro/consent-version — single source of truth shared with
+# pre-commit and post-checkout, replacing three separately hardcoded
+# copies of the same string. See pre-commit's comment on this file for
+# the full reasoning.
+CONSENT_VERSION=$(cat .kiro/consent-version 2>/dev/null | tr -d '[:space:]')
 CONSENT_FILE="$HOME/.kiro-tracking-consent-ack"
 if ! grep -q "^$CONSENT_VERSION|" "$CONSENT_FILE" 2>/dev/null; then
   mkdir -p .kiro-tracking

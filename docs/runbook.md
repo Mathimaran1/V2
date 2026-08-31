@@ -52,7 +52,7 @@ inclusion: always
 - Every commit message must start with "PROJ-123: short description".
 
 ## Commit message trailer format
-Every commit gets six machine-readable trailers, stamped automatically
+Every commit gets eight machine-readable trailers, stamped automatically
 by `.githooks/commit-msg` — nothing to type by hand:
 ```
 Kiro-Ticket: PROJ-123
@@ -61,13 +61,28 @@ Kiro-Credits: 42
 Kiro-Confidence: high
 Kiro-Session: 8f3a1c2e-...
 Kiro-Source: kiro_session
+Kiro-Episode-Started: 2026-08-28T05:59:04Z
+Kiro-Elapsed-Minutes: 12.34
 ```
 `none`/`n/a` fallbacks apply when a field can't be resolved.
+`Kiro-Episode-Started`/`Kiro-Elapsed-Minutes` (added 2026-08-28) are
+time tracking's counterpart to `Kiro-Episode`/`Kiro-Credits` — a fixed
+start timestamp written once per episode, and a value recalculated
+fresh every commit against it. See the time tracking rule below.
 
 ## Credit calculation rule
 `Kiro-Credits` is cumulative *within one episode*, not incremental per
 commit. Take the MAX per `Kiro-Episode`, then SUM those maxes per
 ticket — never sum raw `Kiro-Credits` across commits directly.
+
+## Time tracking rule
+`Kiro-Elapsed-Minutes` follows the identical max-per-episode-then-sum
+rule as `Kiro-Credits`, for the identical reason (cumulative since
+`Kiro-Episode-Started`, not comparable across episodes). Aggregated
+independently of credits in `scripts/calculate-pr-credits.sh`: a commit
+with valid `Kiro-Credits` but no `Kiro-Elapsed-Minutes` (predates this
+field) still counts fully toward the credits total, and is reported as
+`n/a` minutes rather than `0.00` only for the elapsed side.
 
 ## Approved tools
 - Only use the "atlassian-rovo" and "aws" connections already set up
@@ -89,23 +104,70 @@ entries.)
 
 ### `.kiro/settings/mcp.json`
 **Who makes it:** you, one time.
-**What it does:** connects Kiro to Jira and SonarQube. Both are required — SonarQube is not optional, because the quality check results feed the dashboard and the merge check.
+**What it does:** connects Kiro to Jira (`atlassian-rovo`, live and working —
+see §4/§6/§7) and AWS (`aws`, read-only), plus, added 2026-08-28,
+`sonarqube` — the real config, matching the file as it actually exists
+today (the block below was an early aspirational sketch — wrong on two
+counts found later: the real Jira entry is keyed `atlassian-rovo`, not
+`atlassian`, and the real official SonarQube MCP Server doesn't take a
+bare `url` at all — it's a local process, launched via `command`/`args`,
+that connects out to SonarQube itself):
 ```json
 {
   "mcpServers": {
-    "atlassian": {
-      "url": "https://mcp.atlassian.com/v1/sse",
+    "atlassian-rovo": {
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
       "disabled": false,
-      "autoApprove": ["getJiraIssue", "searchJiraIssuesUsingJql"]
+      "autoApprove": []
     },
     "sonarqube": {
-      "url": "https://your-sonarqube-host/mcp",
-      "disabled": false,
-      "autoApprove": ["getQualityGateStatus", "getProjectIssues"]
-    }
+      "command": "docker",
+      "args": ["run", "--init", "--pull=always", "--rm", "-i",
+                "-e", "SONARQUBE_TOKEN", "-e", "SONARQUBE_URL",
+                "sonarsource/sonarqube-mcp"],
+      "env": {
+        "SONARQUBE_TOKEN": "REPLACE_WITH_REAL_SONARQUBE_USER_TOKEN",
+        "SONARQUBE_URL": "https://sonarqube-alcs-saas.teamlease.com"
+      },
+      "disabled": true,
+      "autoApprove": ["get_project_quality_gate_status", "list_quality_gates"]
+    },
+    "aws": { "...": "read-only, see the real file — unchanged by this entry" }
   }
 }
 ```
+**Read-only quality *check*, not enforcement — stated plainly, not
+implied.** This connection lets a dev or Kiro ask "what's the quality
+gate status for PROJECT-KEY?" conversationally and get a real
+pass/fail answer back. It does **not** block a bad PR from merging on
+its own — there's no write access to AWS from here to fail a PR check
+in the AWS PR UI (that's the separate, still-blocked pipeline work —
+see §6/§8/`TODO.md`). `autoApprove` is deliberately limited to two
+read-only tools (`get_project_quality_gate_status`, `list_quality_gates`)
+out of 70+ the real server exposes — every other tool (code analysis,
+issue mutation, webhook/admin tools, etc.) still requires explicit
+approval per call, on purpose, since this connection's whole point is
+"check status," not "let Kiro drive SonarQube."
+
+**Currently `"disabled": true` — two real, independent blockers, not
+one:**
+1. **No real `SONARQUBE_TOKEN` yet.** The env value above is an
+   obvious placeholder (matching this repo's existing convention —
+   see `pre-push`'s `YOUR_PROJECT`/`your-sonarqube-host`), not a fake
+   value dressed up as real. Per explicit instruction: do not fill
+   this in with anything but a real user token once provided.
+2. **Neither documented runtime for this server is installed on this
+   machine, confirmed directly, not assumed:** `docker --version` →
+   `command not found`; the local-process alternative (a standalone
+   JAR, documented at
+   [github.com/SonarSource/sonarqube-mcp-server](https://github.com/SonarSource/sonarqube-mcp-server))
+   needs Java 21+, and `java -version` also → `command not found`.
+   Whoever installs the real token also needs to install one of these
+   two runtimes first — installing the token alone doesn't make this
+   connection usable.
+
+See `TODO.md`'s 2026-08-28 SonarQube MCP entry for the full record and
+what's still needed to actually flip this to `disabled: false`.
 
 ### `.kiro/current-ticket.json`
 **Who makes it:** a Kiro hook, automatically.
@@ -144,6 +206,12 @@ test record):
 **Who makes it:** you, one time — either through Kiro's Agent Hooks panel ("+ Create Hook"), or hand-written directly in this schema (confirmed: Kiro picks up hand-written files in `.kiro/hooks/` on its own, no UI step required, as long as the shape below is matched exactly).
 **What it does:** two of the three episode-starting cases, since both need to fire on every prompt. (1) Asks for the ticket ID when nothing is saved yet (CASE A below). (2) Notices when a dev is planning/working on a *different* ticket than the one saved, without having switched branches or answered CASE B's post-commit question yet — this is the softer, secondary safety net (CASE C below), not the primary mid-session-switch mechanism (that's CASE B, in `.githooks/post-commit` — see further down). Both cases in this file end in a fresh `credits_at_ticket_start` baseline and `episode_id`.
 **Note:** this is Kiro's actual hook schema, confirmed by inspecting what the Agent Hooks UI itself writes to disk — an earlier draft of this file used a made-up shape (`when`/`then`/`promptSubmitted`/`agentAction`) that Kiro silently ignored. If you're adding more hooks later, match this shape, not that one.
+**This snippet shows the schema shape only — it predates the PRIORITY
+CHECK section, the mandatory `getAccessibleAtlassianResources` cloudId
+lookup, and `"none"`'s final (restored, explicit-choice) handling, all
+added across 2026-08-27. Read the real
+`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json` for the current
+prompt text — don't copy this one verbatim.
 ```json
 {
   "version": "v1",
@@ -153,7 +221,7 @@ test record):
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "agent",
-        "prompt": "First check .kiro/current-ticket.json. This hook handles two of the three cases that can start a new episode \u2014 CASE A and CASE C. (CASE B \u2014 a direct, deterministic post-commit question, the primary switch-detection mechanism \u2014 lives entirely in .githooks/post-commit, not in this AI-driven hook. CASE C below is the softer secondary safety net that can catch a switch mid-conversation, before anything has even been committed yet.)\n\nCASE A \u2014 ticket_id is empty or missing: this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) \u2014 so branch on the current message: (A1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123) or is exactly 'none', treat that message AS the answer to the pending question \u2014 read the current credit total AND generate a fresh episode_id by running exactly this command (do not improvise another method \u2014 the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 this prints two lines: line 1 is the credit total, line 2 is the new episode_id. Use both verbatim, do not read either off of any other command's raw/truncated output and do not generate the episode_id yourself some other way. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into .kiro/current-ticket.json (this fully replaces the file's contents \u2014 there is no pending_switch_to to worry about here since the file was empty), briefly confirm it's saved, then continue handling the rest of their request normally \u2014 do not ask again. (A2) Otherwise, the message is a normal work request, not an answer to a prior question \u2014 stop and ask which Jira ticket they're working on (or 'none' for work with no ticket) before doing anything else with their request, and wait for their next message to be treated as the answer per (A1).\n\nCASE C \u2014 ticket_id is non-empty: this is the mid-session ticket-switch case (no branch change has happened, so post-checkout never cleared the file) \u2014 also a two-step flow, using a pending_switch_to field in current-ticket.json as the state signal instead of file-emptiness, since the file stays non-empty throughout this whole exchange: (C1) if current-ticket.json ALSO already has a non-empty pending_switch_to field, a switch question was asked on the previous turn \u2014 treat the CURRENT message as the answer to it, not as a new request yet. If the message is a clear affirmative (e.g. 'yes', 'switch', 'confirm', or it repeats the pending_switch_to ticket ID), the switch is confirmed: generate a fresh baseline and episode_id for the NEW ticket by running exactly this command: `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 same two-line output as in (A1). Then write {\"ticket_id\": <pending_switch_to's value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into current-ticket.json \u2014 this REPLACES the old ticket_id, baseline, and episode_id entirely, and drops the pending_switch_to field (do not carry it over). Briefly confirm the switch happened, then continue with the rest of their request normally. If the message is NOT a clear affirmative (declines, is ambiguous, or is unrelated to the question), default to NOT switching \u2014 this is the safe default, since silently switching on an ambiguous reply risks misattributing credits just as badly as never asking at all. Remove only the pending_switch_to field, leave ticket_id, credits_at_ticket_start, and episode_id exactly as they were, briefly note you're staying on the current ticket, then continue with their original request normally. (C2) Otherwise (no pending_switch_to set), check whether the user's CURRENT message clearly indicates they are now working on or actively planning a SPECIFIC different Jira ticket than the one saved \u2014 i.e. it mentions another ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ in a context suggesting real work or planning on it (not a passing reference, a comparison to past work, or an example). If so, do NOT proceed with their request yet \u2014 ask to confirm: \"You're currently tracked on <the saved ticket_id> \u2014 are you switching to <the mentioned ticket ID>?\", and write pending_switch_to set to that mentioned ticket ID into current-ticket.json, merged in alongside the existing ticket_id/credits_at_ticket_start/episode_id (do not touch those three fields yet), then wait for their next message to be treated as the answer per (C1). If no different ticket is clearly indicated, do nothing extra and proceed with the request normally, exactly as before this whole mid-session-switch logic existed."
+        "prompt": "First check .kiro/current-ticket.json. This hook handles two of the three cases that can start a new episode \u2014 CASE A and CASE C. (CASE B \u2014 a direct, deterministic post-commit question, the primary switch-detection mechanism \u2014 lives entirely in .githooks/post-commit, not in this AI-driven hook. CASE C below is the softer secondary safety net that can catch a switch mid-conversation, before anything has even been committed yet.)\n\nCASE A \u2014 ticket_id is empty or missing: this is a two-step flow across two separate prompts (a hook cannot ask-then-wait-then-save within a single turn) \u2014 so branch on the current message: (A1) if the user's current message is exactly a Jira ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ (e.g. ANG-123), treat that message AS the answer to the pending question \u2014 read the current credit total AND generate a fresh episode_id by running exactly this command (do not improvise another method \u2014 the .vscdb file is binary SQLite, not line/tab-delimited text, and 'sqlite3' CLI is not installed on this machine, so both a raw `cat`/`head` read and a naive Node text-split WILL silently produce a wrong or fabricated number instead of erroring): `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 this prints two lines: line 1 is the credit total, line 2 is the new episode_id. Use both verbatim, do not read either off of any other command's raw/truncated output and do not generate the episode_id yourself some other way. Then write {\"ticket_id\": <that value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into .kiro/current-ticket.json (this fully replaces the file's contents \u2014 there is no pending_switch_to to worry about here since the file was empty), briefly confirm it's saved, then continue handling the rest of their request normally \u2014 do not ask again. (A2) Otherwise, the message is a normal work request, not an answer to a prior question \u2014 stop and ask which Jira ticket they're working on — every commit now requires a real, validated ticket, no exceptions — before doing anything else with their request, and wait for their next message to be treated as the answer per (A1).\n\nCASE C \u2014 ticket_id is non-empty: this is the mid-session ticket-switch case (no branch change has happened, so post-checkout never cleared the file) \u2014 also a two-step flow, using a pending_switch_to field in current-ticket.json as the state signal instead of file-emptiness, since the file stays non-empty throughout this whole exchange: (C1) if current-ticket.json ALSO already has a non-empty pending_switch_to field, a switch question was asked on the previous turn \u2014 treat the CURRENT message as the answer to it, not as a new request yet. If the message is a clear affirmative (e.g. 'yes', 'switch', 'confirm', or it repeats the pending_switch_to ticket ID), the switch is confirmed: generate a fresh baseline and episode_id for the NEW ticket by running exactly this command: `python3 -c \"import sqlite3,json,os,time,secrets; con=sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb')); row=con.execute(\\\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\\\").fetchone(); val=row[0]; val=val.decode('utf-8') if isinstance(val,bytes) else val; usage=json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']; print(usage); print('ep_'+format(int(time.time()),'x')+secrets.token_hex(3))\"` \u2014 same two-line output as in (A1). Then write {\"ticket_id\": <pending_switch_to's value>, \"credits_at_ticket_start\": <line 1>, \"episode_id\": <line 2>} into current-ticket.json \u2014 this REPLACES the old ticket_id, baseline, and episode_id entirely, and drops the pending_switch_to field (do not carry it over). Briefly confirm the switch happened, then continue with the rest of their request normally. If the message is NOT a clear affirmative (declines, is ambiguous, or is unrelated to the question), default to NOT switching \u2014 this is the safe default, since silently switching on an ambiguous reply risks misattributing credits just as badly as never asking at all. Remove only the pending_switch_to field, leave ticket_id, credits_at_ticket_start, and episode_id exactly as they were, briefly note you're staying on the current ticket, then continue with their original request normally. (C2) Otherwise (no pending_switch_to set), check whether the user's CURRENT message clearly indicates they are now working on or actively planning a SPECIFIC different Jira ticket than the one saved \u2014 i.e. it mentions another ticket ID matching ^[A-Z][A-Z0-9]*-[0-9]+$ in a context suggesting real work or planning on it (not a passing reference, a comparison to past work, or an example). If so, do NOT proceed with their request yet \u2014 ask to confirm: \"You're currently tracked on <the saved ticket_id> \u2014 are you switching to <the mentioned ticket ID>?\", and write pending_switch_to set to that mentioned ticket ID into current-ticket.json, merged in alongside the existing ticket_id/credits_at_ticket_start/episode_id (do not touch those three fields yet), then wait for their next message to be treated as the answer per (C1). If no different ticket is clearly indicated, do nothing extra and proceed with the request normally, exactly as before this whole mid-session-switch logic existed."
       },
       "enabled": true
     }
@@ -200,6 +268,12 @@ fi
 
 ### `.githooks/pre-commit`
 **Who makes it:** you, one time. **This is the most important file — it writes the actual tracking record.**
+**This snippet is a build-order tutorial, not a live mirror — it
+predates the `$KIRO_AGENT_COMMIT`/`$KIRO_AGENT_COMMIT_UNCONFIRMED`
+checks, the `/dev/tty`-explicit consent read, and several other
+same-day fixes (its `CONSENT_VERSION="v1"` below is stale too — the
+real file is on `v2`). Read `.githooks/pre-commit` itself for the
+current logic; don't copy this block verbatim.**
 ```bash
 #!/bin/bash
 # 0. Consent check — must happen before any tracking activity at all,
@@ -228,26 +302,31 @@ fi
 # 1. Check for passwords/keys first — stops the commit if it finds any
 gitleaks protect --staged || exit 1
 
-# 2. Find the ticket ID: saved file, or defer entirely to Kiro chat.
-# Branch-name ticket guessing removed 2026-08-27 — one fewer code path
-# for a ticket ID nothing here could actually validate anyway. The
-# interactive terminal prompt itself was removed the same day, shortly
-# after — it double-asked what Kiro chat's CASE A already asks, and
-# hung when a commit ran non-interactively (an agent's tool execution)
-# with nothing able to answer it. `SOURCE` now has exactly two possible
-# values: `kiro_session` (from current-ticket.json) or `unset`.
+# 2. Find the ticket ID: saved file, or BLOCK the commit entirely —
+# but ONLY when nothing has ever been chosen at all. Branch-name ticket
+# guessing and the interactive terminal prompt were both removed
+# 2026-08-27 (one fewer unvalidatable code path, then a double-ask/hang
+# problem found through live testing). Later the same day, a policy
+# reversal removed "no ticket = track as none and let it through"
+# entirely — then that reversal was itself corrected to a middle
+# ground the same day: "none" is a legitimate, explicit choice again
+# (written with a real baseline/episode, just like a real ticket), but
+# it must be actively chosen through Kiro chat or the switch prompt —
+# never a silent default. This block's `exit 1` below only fires when
+# NOTHING has been chosen yet; once "none" is saved, `ticket_id` is the
+# non-empty string "none" and this check passes normally. `SOURCE` is
+# always `kiro_session` now — `branch_name`, `manual_entry`, and
+# `unset` were the only other values it ever took, and all three are
+# gone. See TODO.md's 2026-08-27 entries for the full sequence.
 TICKET_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ticket_id // empty')
 SOURCE="kiro_session"
 
 if [ -z "$TICKET_ID" ]; then
-  SOURCE="unset"
-  TICKET_ID="none"
+  echo "❌ No ticket set for this work. Please open Kiro chat and tell it" >&2
+  echo "   which ticket you're working on before committing. Every commit" >&2
+  echo "   requires a real ticket — there are no exceptions." >&2
+  exit 1
 fi
-
-# The old "fail closed on a blank read" block lived here — removed
-# 2026-08-27 along with the terminal prompt above, since TICKET_ID can
-# no longer come out empty at this point (it's always either the saved
-# value or "none").
 
 # 3. Get credit numbers from the real local sources (no kiro-session-info —
 #    that command doesn't exist; confirmed by inspecting the actual files):
@@ -437,6 +516,9 @@ This one is gitignored, purely for a human to glance at:
   "kiro_used": true,
   "credits_used_so_far": 42,
   "credit_confidence": "high",
+  "episode_id": "ep_68aabbcc1a2b3c",
+  "episode_started_at": "2026-08-28T05:59:04Z",
+  "elapsed_minutes": 12.34,
   "dev": "jane.doe@company.com",
   "branch": "PROJ-123-fix-login",
   "commit_time": "2026-08-24T10:15:00Z"
@@ -478,6 +560,7 @@ GIT_DIR=$(git rev-parse --git-dir)
 DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
 KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
 KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
+KIRO_EPISODE_STARTED_AT="" KIRO_ELAPSED_MINUTES=""
 [ -f "$DATA_FILE" ] && . "$DATA_FILE"
 rm -f "$DATA_FILE"
 
@@ -488,6 +571,10 @@ CREDITS="${KIRO_CREDITS_DELTA:-n/a}"
 CONFIDENCE="${KIRO_CREDIT_CONFIDENCE:-n/a}"
 SESSION_ID="${KIRO_SESSION_ID:-none}"
 SOURCE="${KIRO_TICKET_SOURCE:-n/a}"
+# Time tracking, added 2026-08-28 — same defaulting pattern as credits.
+EPISODE_STARTED="${KIRO_EPISODE_STARTED_AT:-none}"
+ELAPSED="${KIRO_ELAPSED_MINUTES:-n/a}"
+[ "$ELAPSED" = "null" ] && ELAPSED="n/a"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"
@@ -495,6 +582,8 @@ echo "Kiro-Credits: $CREDITS" >> "$1"
 echo "Kiro-Confidence: $CONFIDENCE" >> "$1"
 echo "Kiro-Session: $SESSION_ID" >> "$1"
 echo "Kiro-Source: $SOURCE" >> "$1"
+echo "Kiro-Episode-Started: $EPISODE_STARTED" >> "$1"
+echo "Kiro-Elapsed-Minutes: $ELAPSED" >> "$1"
 ```
 
 ### `.githooks/post-commit`
@@ -510,6 +599,17 @@ total as the new baseline, and overwrites `current-ticket.json`. Since
 this runs *after* the commit, the switch only affects the *next*
 commit — the one that triggered the question still carries the old
 ticket/episode, confirmed by testing.
+
+**This snippet predates several same-day fixes and is kept only as a
+build-order tutorial, not a live mirror — read `.githooks/post-commit`
+itself for the real, current logic.** Missing here: the
+`$KIRO_AGENT_COMMIT` check (added 2026-08-27, so an agent's own commit
+doesn't get this question dumped into a chat transcript), the deferred
+Jira-validation flow via `.kiro/pending-ticket-check.json` for a real
+typed ticket, and `"none"`'s final form — restored 2026-08-27 as an
+explicit, actively-chosen switch target (real baseline/episode written
+immediately, with a confirmation message), after briefly being removed
+entirely earlier the same day. Don't copy this block verbatim.
 ```bash
 #!/bin/bash
 # CASE B: deterministic, non-AI mid-session ticket-switch check. Runs
@@ -545,7 +645,7 @@ if [ "$HAS_TTY" = "1" ]; then
 fi
 
 if [ "$HAS_TTY" = "1" ] && { [ "$SWITCH_ANSWER" = "y" ] || [ "$SWITCH_ANSWER" = "Y" ]; }; then
-  read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty
+  read -p "New ticket ID (or 'none'): " NEW_TICKET < /dev/tty   # see TODO.md, 2026-08-27, for "none"'s final (restored) handling — not shown in this simplified snippet
   if [ -n "$NEW_TICKET" ]; then
     RESULT=$(python3 -c "
 import sqlite3, json, os, time, secrets
@@ -761,6 +861,9 @@ Every commit writes this (see section 1 for the full script):
   "kiro_used": true,
   "credits_used_so_far": 42,
   "credit_confidence": "high",
+  "episode_id": "ep_68aabbcc1a2b3c",
+  "episode_started_at": "2026-08-28T05:59:04Z",
+  "elapsed_minutes": 12.34,
   "dev": "jane.doe@company.com",
   "branch": "PROJ-123-fix-login",
   "commit_time": "2026-08-24T10:15:00Z"
@@ -769,7 +872,7 @@ Every commit writes this (see section 1 for the full script):
 
 ### The Kiro tag mechanism, step by step
 1. **At commit time**, `commit-msg` reads the log file above and appends
-   six lines onto the real commit message:
+   eight lines onto the real commit message:
    ```
    PROJ-123: fix login bug
 
@@ -779,6 +882,8 @@ Every commit writes this (see section 1 for the full script):
    Kiro-Confidence: high
    Kiro-Session: 8f3a1c2e-...
    Kiro-Source: kiro_session
+   Kiro-Episode-Started: 2026-08-28T05:59:04Z
+   Kiro-Elapsed-Minutes: 12.34
    ```
 2. This tag can only be produced by a real local hook run — nothing
    generates it remotely, so a commit made without hooks configured has

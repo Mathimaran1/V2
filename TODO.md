@@ -1537,3 +1537,722 @@ a future person (or a future me).
         code-enforced — nothing stops a future agent turn from just
         asking a 4th, 5th, 6th time instead of following this rule, the
         same honest limit already stated for CASE B's base mechanism.
+
+## 2026-08-27 (same day, follow-up): "no ticket = none" reversed entirely — every commit now requires a real ticket, no exceptions
+- [x] **What prompted this, stated plainly:** this was a deliberate
+      policy decision, not a bug fix — the "no ticket = track as `none`
+      and let the commit through" design was working exactly as built
+      (confirmed live earlier the same day: two real "testing case a"
+      commits landed cleanly under `Kiro-Ticket: none` /
+      `Kiro-Source: unset`, on the `test-case-a` branch). Seeing that
+      design actually work in practice is what prompted the decision to
+      reverse it: untracked/exploratory commits are no longer allowed
+      at all, not even honestly labeled ones.
+- [x] **Changed, all four places `none` existed as a valid ticket
+      answer, confirmed by grepping the whole repo, not assumed
+      complete from memory:**
+      - **`.githooks/pre-commit`:** the entire "empty ticket → track as
+        `none`, write a null pending-flag, let the commit through"
+        block (built two entries up, then patched for the
+        null-clobber bug one entry after that) is gone, replaced with
+        an unconditional block: `if [ -z "$TICKET_ID" ]; then` prints
+        the exact requested message and `exit 1`. No pending file is
+        written in this case anymore — there's nothing to defer once
+        the commit itself doesn't happen. The now-constant `SOURCE`
+        variable is kept (not hardcoded inline) since it's still a
+        real trailer field, with a comment explaining it's always
+        `kiro_session` now.
+      - **`.githooks/post-commit`:** the switch-flow's `elif
+        [ "$NEW_TICKET" = "none" ]` branch (which used to skip Jira
+        validation and switch to an untracked state immediately, since
+        "none" was never a claim about a real ticket) is deleted,
+        along with the `"(or 'none')"` text in the prompt itself. A
+        typed `"none"` now falls into the same "can't validate here,
+        defer to chat" branch as any other string — it becomes an
+        ordinary pending ticket that Jira will (correctly) reject as
+        nonexistent, rather than a specially-recognized bypass.
+        Declining the switch with a blank answer is unaffected —
+        that was never "setting the ticket to none," just not
+        switching, and stays exactly as it was.
+      - **`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`:** six
+        separate `'none'`-related phrases removed from the prompt
+        text, each verified present, unique, and successfully replaced
+        via a scripted patch with assertions (same reliable method used
+        for every previous hook-JSON edit this session, to avoid the
+        JSON-escaping mistakes found earlier): CASE A1's "or is exactly
+        'none'" answer-recognition clause and its "(not 'none')"
+        validation-skip clause; CASE A2's "(or 'none' for work with no
+        ticket)" option in the question itself, replaced with an
+        explicit "every commit now requires a real, validated ticket,
+        no exceptions" clause; CASE C1's "unless pending_switch_to is
+        exactly 'none'" validation-skip clause (already effectively
+        dead code in practice, since CASE C2's own trigger regex could
+        never produce a literal "none" — removed anyway for
+        consistency); and two "Once it's 'none', or..." phrasings
+        tightened to drop the now-impossible case. The PRIORITY CHECK
+        section's entire "shape 2" (`typed_ticket: null`, pre-commit's
+        old "nothing typed" flag) is deleted along with its dedicated
+        handling paragraph — there is only one shape left
+        (`post-commit`'s real typed value), since `pre-commit` no
+        longer produces the other one. One legitimate, deliberately
+        kept mention remains: a backward-compatibility note that a
+        *leftover* `"none"` from before this reversal still counts as
+        "different from the new ticket" if found in an old
+        `current-ticket.json` — not an option offered going forward,
+        just graceful handling of pre-existing data.
+      - **`docs/runbook.md`:** targeted fixes to the same "none"
+        mentions in its embedded hook snippets (the pre-commit and
+        ask-ticket-hook copies), without attempting a full resync of
+        this doc's other, already-flagged staleness (see README §2/§6)
+        — out of scope of this specific reversal. One mention at line
+        ~711 was left untouched on inspection: it correctly describes
+        `"none"` as *historical* behavior ("before this was tracked"),
+        justifying today's max-per-episode aggregation logic — not an
+        offer of `"none"` as a current option, so nothing to fix there.
+      - **`.kiro/steering/aidlc-git-conventions.md`:** new top-level
+        section, "Ticket assignment is mandatory — no exceptions, no
+        'none'," added right after "Ticket linking," spelling out the
+        policy, what changed concretely at each of the three affected
+        points, what's unchanged (an already-set/validated ticket, and
+        the pending-validation flow for a typed/switched ticket), and
+        the honest trade-off.
+- [x] **Tested for real, 4 scenarios plus a regression check, isolated
+      repo (fresh `git init`, real copied hooks), real pty where
+      interactivity mattered:**
+      1. **Empty `current-ticket.json`, attempt to commit:** blocked,
+         `EXIT=1`, the exact requested message printed verbatim, no
+         commit created (`git log` unchanged, file still staged).
+      2. **Post-commit's switch flow, typing `none` as the new
+         ticket:** `current-ticket.json` stayed on the old ticket
+         (`ANG-150`), unchanged; `.kiro/pending-ticket-check.json`
+         recorded `{"typed_ticket": "none", ...}` — confirmed `none` is
+         no longer specially recognized, just an ordinary string headed
+         for (correct) rejection by real Jira validation.
+      3. **A real, already-validated ticket set, then commit:**
+         succeeded normally — `[master ...] Test 3...`, correct
+         trailers (`Kiro-Ticket: ANG-150`, etc.) — completely
+         unaffected by the reversal.
+      4. **Post-commit's switch flow, typing a real-looking ticket
+         (`ANG-151`):** still deferred to
+         `.kiro/pending-ticket-check.json` exactly as before —
+         regression-free.
+      5. **Regression — declining the switch with a blank answer:**
+         `current-ticket.json` untouched, no pending file written,
+         "No ticket entered — staying on the current ticket." printed
+         — confirms declining was never conflated with setting `none`
+         as a value, and stays unaffected.
+      `bash -n` on both hooks and `json.load` on the hook JSON
+      syntax-checked clean after every edit.
+- [x] **What could not be tested directly, stated honestly rather than
+      assumed:** whether Kiro chat itself, mid-conversation, actually
+      refuses a literal "none" reply and re-asks — this is chat-side
+      behavior, the same category of untestable-from-this-session thing
+      as the MCP validation flow itself (§8). Traced through the logic
+      instead of asserting it: "none" no longer matches CASE A1's
+      ticket-ID regex, so it's no longer recognized as an answer to the
+      pending question at all, and CASE A2's "not an answer, ask again"
+      path takes over — consistent with the intended behavior, but a
+      real live-chat run (same as the outstanding item from two entries
+      up) is still the only way to fully confirm it.
+
+## 2026-08-27 (same day, follow-up): "none" restored as an explicit, active choice — the settled middle ground
+- [x] **Why this isn't a third flip-flop for its own sake:** the full
+      reversal above fixed a real problem (silent `none`, never an
+      active choice) but created a different one — genuinely
+      ticket-less work (a quick experiment, a config tweak) had no way
+      to be committed at all, honestly labeled or otherwise. The
+      correct design was never "permissive" vs. "strict" as a binary —
+      it's "something must always be chosen" (mandatory) with `none`
+      as one of the legitimate choices (not a silent default). This
+      entry is that correction, landed the same day as the reversal it
+      corrects.
+- [x] **Changed, three places, restoring `none` as an ACTIVE choice
+      only — never brought back as a default anywhere:**
+      - **`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`, CASE
+        A1:** `'none'` recognized again alongside the ticket-ID regex
+        as a valid answer to the pending question. Skips Jira
+        validation for it specifically (no claim about a real ticket
+        to check), but — this is the key difference from the original,
+        too-permissive design — still runs the exact same
+        credit-baseline-plus-episode-id command a real validated
+        ticket would, and writes `{"ticket_id": "none",
+        "credits_at_ticket_start": <real>, "episode_id": <real>}` into
+        `current-ticket.json` exactly like a real ticket. No degraded
+        `Kiro-Episode: none` / `Kiro-Credits: n/a` stand-in this time —
+        `none` gets full, real tracking once chosen.
+      - **CASE A2's question**, reworded to state the choice
+        explicitly: *"which Jira ticket are you working on (a real
+        ticket ID, or explicitly 'none' for work with no ticket)?"* —
+        matching the exact phrasing requested.
+      - **`.githooks/post-commit`'s switch flow:** the `elif
+        [ "$NEW_TICKET" = "none" ]` branch (deleted in the full
+        reversal) is back — same real-baseline-write logic as before,
+        plus a new, more explicit confirmation line ("Tracked
+        explicitly as no-ticket work, not a silent default") so the
+        choice reads as deliberate in the terminal output, not a quiet
+        default slipping through. The prompt text's `(or 'none')`
+        option is restored too.
+      - **`.githooks/pre-commit`: no code change**, exactly as
+        requested — its empty-check block (`if [ -z "$TICKET_ID" ];
+        then ... exit 1`) already does the right thing once `none` is a
+        real saved value: `ticket_id` becomes the non-empty string
+        `"none"`, so the block never fires for it. Only a comment was
+        added explaining why no change was needed, for future readers
+        who might otherwise wonder why `none` isn't special-cased here
+        too.
+      - **`.kiro/steering/aidlc-git-conventions.md`:** the "Ticket
+        assignment is mandatory" section rewritten (not appended to
+        history-style, since it directly describes the two prior,
+        now-both-superseded designs by name) to state the final
+        design plainly: something must always be actively chosen; a
+        real ticket or `none` both count; only genuinely nothing
+        chosen yet blocks anything.
+- [x] **Tested for real, 4 scenarios, isolated repo, real pty:**
+      1. **Regression — empty ticket, attempt to commit:** still
+         blocked, `EXIT=1`, identical message to the full-reversal
+         phase — confirms the mandatory-choice half of the policy
+         survived this correction unchanged.
+      2. **Explicit "none" answer:** ran the *exact* command CASE A1
+         specifies (not a fabricated value) — `python3 -c
+         "import sqlite3..."` against the real `state.vscdb` — got a
+         real credit figure (`258.48`) and a real fresh `episode_id`
+         (`ep_6a903eaa79c1c1`), wrote
+         `{"ticket_id": "none", "credits_at_ticket_start": 258.48,
+         "episode_id": "ep_6a903eaa79c1c1"}` into `current-ticket.json`
+         to simulate the chat exchange having happened, then committed
+         for real: succeeded, `Kiro-Ticket: none` with the real
+         episode and a real (if `0.0000`, since no time had passed)
+         credit delta — not the degraded `none`/`n/a` shape from
+         before either policy change.
+      3. **A real, already-set ticket, then commit:** succeeded
+         normally, unaffected by any of this.
+      4. **`post-commit`'s switch flow, explicitly typing `none`:**
+         accepted with the new confirmation message
+         ("✅ Switched to 'none' — new episode ..., baseline ...
+         credits. Tracked explicitly as no-ticket work, not a silent
+         default."), real baseline/episode written. Confirmed on the
+         *next* commit that the switch had actually taken effect
+         (`Kiro-Ticket: none`, same episode id persisted). A follow-up
+         regression check confirmed a real ticket typed at the same
+         prompt immediately after still defers to
+         `.kiro/pending-ticket-check.json` exactly as before — restoring
+         `none` alongside it didn't disturb the real-ticket path.
+      `bash -n` on both hooks and `json.load` on the hook JSON
+      syntax-checked clean after every edit.
+- [x] **What still can't be tested directly, same honest limitation as
+      the reversal it corrects:** the live chat exchange itself — Kiro
+      asking, a human answering "none," Kiro recognizing and saving it
+      — needs a real Kiro session to exercise, same as the still-open
+      MCP-validation item from two entries up. Scenario 2 above
+      simulated the *result* of that exchange (the real file write
+      CASE A1's instructions specify), not the exchange itself.
+
+## 2026-08-27 (same day, follow-up): full dead-code and cleanup audit across the whole repo
+- [x] **Method:** grepped the entire repo (not just the file being
+      checked) for every category named in the request, before removing
+      anything. Read every hook, both scripts, all three `.kiro/`
+      JSON/steering files, and did a targeted sweep of `README.md`,
+      `docs/runbook.md`, and `.gitignore` for descriptions of removed
+      behavior presented as current (historical mentions with
+      "superseded" labels were left alone, per this repo's own
+      convention).
+- [x] **Checked and confirmed already clean (no removal needed) —
+      listed explicitly so "checked" isn't confused with "skipped":**
+      - `validate_jira_ticket()` — zero remaining definitions or call
+        sites in `.githooks/pre-commit` or `.githooks/post-commit`;
+        confirmed already fully removed (across the 2026-08-27 entries
+        several sections up), not partially left in one file.
+      - `SOURCE="branch_name"` / branch-name-guessing logic — zero
+        remaining live references anywhere in `.githooks/` or
+        `.kiro/`; only historical comments/decision-log mentions
+        remain, all correctly past-tense.
+      - The old `.kiro-tracking/*.json`-per-commit accumulation
+        pattern — no `git add` of any `.kiro-tracking/*.json` file
+        anywhere, no `LOGFILE=` timestamped-filename pattern; only the
+        transient `.git/KIRO_COMMIT_DATA` handoff and the one
+        overwritten-per-ticket debug file remain, exactly as designed.
+      - `EXISTING_PENDING_TICKET` / the null-clobber guard logic in
+        `pre-commit` — confirmed fully gone, not dangling; it was
+        already correctly removed when the null-flag deferral mechanism
+        itself was removed (the "no ticket = none" full reversal), and
+        was never reintroduced since "none"'s restored form writes
+        `current-ticket.json` immediately rather than deferring through
+        `pending-ticket-check.json` at all.
+      - `scripts/calculate-pr-credits.sh` and `scripts/coverage-report.sh`
+        — read in full; neither references `SOURCE`,
+        `source_of_ticket_id`, `branch_name`, or any old file-naming
+        pattern. Both operate purely on `Kiro-*` commit trailers or
+        plain `git log`, untouched by any of this session's
+        ticket-resolution redesigns. Re-ran `calculate-pr-credits.sh`
+        against fresh test history after the cleanup — correctly
+        aggregated both a real ticket and an explicit `none` as
+        separate buckets, no special-casing needed for `none` at all.
+- [x] **Found and fixed — real leftover/stale content, not previously
+      caught:**
+      1. **`.gitignore`'s comment for `.kiro/pending-ticket-check.json`**
+         described it as written by "pre-commit's manual-entry fallback,
+         or post-commit's ticket-switch prompt" — but pre-commit's
+         manual-entry fallback was removed entirely 2026-08-27 (it no
+         longer prompts the terminal at all). Fixed to describe only
+         the one hook that actually writes this file now
+         (`post-commit`).
+      2. **`docs/runbook.md`'s embedded `pre-commit` snippet's own
+         comment** stated "every commit now requires a real ticket, no
+         exceptions" as the current design — this was the "too strict"
+         phase, already superseded the same day by the `none`-restoration
+         middle ground. Fixed to describe the actual current rule (block
+         only when nothing has ever been chosen; `none` is a legitimate
+         explicit choice).
+      3. **`docs/runbook.md`'s embedded `post-commit` snippet's inline
+         comment** claimed `"(or 'none')"` "removed 2026-08-27" — true
+         for about an hour, then false again once `none` was restored
+         the same day. Fixed the comment and the prompt text itself
+         (restored `(or 'none')` in the snippet, matching the real
+         file).
+      4. **Three build-order-tutorial code blocks in `docs/runbook.md`**
+         (`.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`,
+         `.githooks/pre-commit`, `.githooks/post-commit`) had drifted
+         significantly behind the real files across many same-day fixes
+         — missing the `$KIRO_AGENT_COMMIT`/`$KIRO_AGENT_COMMIT_UNCONFIRMED`
+         checks, the `/dev/tty`-explicit consent read, the PRIORITY
+         CHECK section, the mandatory cloudId lookup, and `none`'s final
+         handling, among others (one even still shows
+         `CONSENT_VERSION="v1"`, superseded to `v2` days ago). Rather
+         than let individual stale phrases keep getting whack-a-mole'd
+         turn after turn, added an explicit disclaimer to each block:
+         this is a one-time build-order tutorial, not a live mirror —
+         read the real file for current logic, don't copy verbatim.
+         This is a documentation-honesty fix, not a code removal — the
+         blocks themselves were left in place as historical/tutorial
+         reference, now correctly labeled as such.
+      5. **`.kiro-tracking/.gitkeep`** — removed. Confirmed by grep that
+         every single write path to `.kiro-tracking/` (`pre-commit`,
+         `post-commit`, `post-checkout`) already calls its own
+         `mkdir -p .kiro-tracking` immediately before writing, so the
+         directory is always created on demand regardless of whether it
+         pre-existed. `.gitkeep`'s only stated purpose (TODO.md, an
+         earlier entry: "kept so the directory still exists for
+         `mkdir -p .kiro-tracking` to find") doesn't hold up — `mkdir -p`
+         creates a missing directory itself, it doesn't need to "find"
+         one already there. Zero functional purpose left; a leftover
+         from when `.kiro-tracking/*.json` files were meant to be
+         committed and visible in a fresh clone.
+- [x] **Checked and deliberately NOT removed — flagged instead of
+      guessed, per the request's own instruction:**
+      - **`.githooks/pre-push`'s disabled SonarQube-gate block
+        (lines after the `exit 0`, including its own separate
+        `aws s3 cp` upload)** — confirmed this is genuinely still
+        sitting there, unreachable, exactly as suspected ("confirm this
+        was actually removed, not just still sitting disabled behind
+        `exit 0`" — answer: it was NOT removed). **Not removing it**:
+        this is categorically different from the other leftover-code
+        categories above — it's not dead code from an ABANDONED design,
+        it's a deliberately stubbed, NOT-YET-BUILT feature (the
+        SonarQube quality gate), explicitly documented in both its own
+        comment ("Remove this block to re-enable... don't just delete
+        this block quietly") and README §8 ("Blocked on AWS write
+        access... Provisioning a real SonarQube host/token"). Deleting
+        it would destroy real, wanted scaffolding for a feature this
+        project still intends to build. This S3 upload is also a
+        separate code path from `pre-commit`'s OWN (ticket-tracking) S3
+        upload, which genuinely was removed 2026-08-25 — confirmed the
+        two were never the same block, so no earlier claim about "S3
+        upload removed" was inaccurate about this one.
+      - **`commit-msg`'s `${KIRO_TICKET_ID:-none}` and similar
+        `:-none`/`:-n/a` defaults** — these fire only if `pre-commit`'s
+        transient `.git/KIRO_COMMIT_DATA` handoff file is missing or a
+        field wasn't set, which shouldn't happen on any normal path
+        since `pre-commit` always blocks before ever reaching that
+        write when there's nothing to write. Kept as defensive
+        fallbacks for an abnormal invocation (a crash between steps, a
+        hook run out of the usual sequence), not dead code — matches
+        the same defensive-fallback pattern used throughout this repo.
+      - **Whether Kiro's own Agent Hooks UI, or any Kiro-internal
+        mechanism outside this repo, still references the OLD
+        `when`/`then`/`promptSubmitted`/`agentAction` hook shape** (the
+        made-up schema an earlier draft of
+        `aidlc-ask-for-ticket-if-missing.json` used, per
+        `docs/runbook.md`'s own note) — **possibly dead, not removing
+        without confirmation**: this is Kiro-side, not inspectable from
+        this repo. Nothing in this repo references that old shape
+        anymore (confirmed by grep), so there's nothing left here to
+        remove either way — flagged only in case it matters on the
+        Kiro-UI side, which is out of this repo's visibility.
+- [x] **Regression tests re-run after cleanup, isolated repo, same 3
+      scenarios that matter most:**
+      1. Empty ticket → still blocked, `EXIT=1`, same message.
+      2. Real ticket (`ANG-170`) → succeeds normally, correct trailers.
+      3. Explicit `"none"` (real baseline via the actual CASE A1
+         command) → succeeds, `Kiro-Ticket: none` with a real episode
+         and credit delta, not a degraded stand-in.
+      Plus: `bash -n` on all 5 hooks and both `scripts/*.sh`, and
+      `json.load` on all 3 `.kiro/` JSON files — all clean. Re-ran
+      `calculate-pr-credits.sh --range` against the fresh test history —
+      correctly totaled both `ANG-170` and `none` as separate buckets,
+      no special-casing required.
+
+## 2026-08-28: `PreToolUse` code-enforced gate — investigated, reverted; two real bugs found along the way stay open
+- [x] **What happened, briefly:** explored replacing CASE B's chat-based
+      profile-click question with a code-enforced `PreToolUse` hook
+      (verified real trigger/matcher/exit-code semantics against
+      `kiro.dev`'s actual docs and a live `kirodotdev/Kiro` GitHub
+      issue — confirmed `exit 2` specifically blocks, not any non-zero
+      code; confirmed no documented way to see which command triggered
+      a firing). Built a throwaway diagnostic hook
+      (`aidlc-pretooluse-diagnostic.json` + `.sh`) to empirically
+      capture the real event-delivery shape before committing to a
+      design — it was never actually fired for real (no
+      `PRETOOLUSE_DIAGNOSTIC.log` was ever created) before a live,
+      unrelated regression surfaced first (see below) and the whole
+      approach was reverted rather than pursued further right now.
+- [x] **Reverted cleanly, confirmed by grep across the whole repo, not
+      assumed:**
+      - Deleted `.kiro/hooks/aidlc-pretooluse-diagnostic.json` and
+        `.kiro/hooks/pretooluse-diagnostic.sh` — both untracked, so
+        `git status` shows zero trace of either ever having existed.
+      - `.kiro-tracking/PRETOOLUSE_DIAGNOSTIC.log` — confirmed it was
+        never created in the first place (`ls` → no such file), nothing
+        to remove.
+      - `.kiro/steering/aidlc-git-conventions.md` — confirmed via
+        `git diff HEAD` that the investigation never actually reached
+        the point of editing this file (the diagnostic-hook build was
+        interrupted by the CASE B regression report below before any
+        steering-doc changes for the `PreToolUse` approach were made).
+        CASE B's profile-click section reads exactly as it did before
+        this investigation started — still the original "ask in chat,
+        wait for a real reply, then `KIRO_AGENT_COMMIT=1`" design, still
+        with the 3-attempt count-based fallback from the unrelated,
+        already-shipped 2026-08-27 work.
+      - `grep -rli "pretooluse" .` across the entire repo (excluding
+        `.git/`) — zero matches. Fully clean, not just the four files
+        named in the revert request.
+- [x] **NOT dropped — both real bugs found during the investigation
+      stay open, explicitly unrelated to which gate design gets used
+      later:**
+      1. **`hook-health.log` had ZERO entries for a commit that
+         otherwise completed successfully.** Commit `11dcdfd` ("test:
+         real ticket should succeed", 2026-08-27T18:13:54Z) is proven
+         to have run `pre-commit` to full completion — real trailers
+         (`Kiro-Episode: ep_6a907e1405a135`, `Kiro-Credits: 0.7300`,
+         etc.) and `.kiro-tracking/ANG-123.json`'s debug-file write
+         (timestamped `2026-08-27T18:14:11Z`, matching the commit)
+         both prove it. But `.kiro-tracking/hook-health.log` has no
+         entry at all for this commit — not even the unconditional
+         final `hook_status=ok` line every successful run is supposed
+         to append, and not any of the three profile-click-gate branch
+         lines (`confirmed-via-chat`, `confirmed-via-chat-unconfirmed`,
+         `refresh-prompt-timeout`, `refresh-prompt-skipped-no-tty`).
+         Confirmed via `git reflog` that this commit was made directly
+         in this working directory, not merged in from elsewhere, so
+         this isn't a "wrong local log file" explanation either.
+         **This means the audit trail can have silent gaps — not just
+         wrong entries, no entry at all** — worth investigating on its
+         own regardless of which profile-click gate design (chat-based
+         or code-enforced) ends up being used, since both designs write
+         to this same log. Not yet root-caused.
+      2. **`.kiro/consent-version` disappeared from disk with no known
+         cause.** Created in the previous task (single source of truth
+         for `CONSENT_VERSION`, replacing three hardcoded copies) and
+         confirmed present and correct at the time. Now absent — `ls`
+         returns "No such file or directory." Not deleted by this
+         session as far as can be determined. `pre-commit`'s own
+         fail-open design means a missing file doesn't silently skip
+         consent (it forces a re-prompt instead — see the file's own
+         comment), but *why* it's gone at all is still unexplained.
+      Both are real, open, unresolved — recorded here explicitly so
+      they don't get lost just because the `PreToolUse` work that
+      surfaced them was reverted.
+
+## 2026-08-28 (same day, follow-up): CASE B's profile-click question skipped TWICE live — steering doc rewritten stronger, testing handed off (not fabricated)
+- [x] **The pattern, stated plainly:** the chat-based ask-and-wait
+      instruction for the profile-click question was skipped live, not
+      once but twice — the second time immediately after the first
+      skip had already been investigated and named explicitly as the
+      failure mode to avoid. Confirms this is a repeating problem with
+      the wording's *strength*, not a one-off misread — a real signal,
+      not noise.
+- [x] **Rewrote CASE B's profile-click section in
+      `aidlc-git-conventions.md`, two added layers, both still
+      explicitly behavioral:**
+      1. A blockquoted "MANDATORY FIRST STEP, NO EXCEPTIONS" directive,
+         explicit about what NOT to do (don't commit, don't set
+         `KIRO_AGENT_COMMIT=1`, don't even `git add` in preparation)
+         until an actual reply has been received — and explicit that
+         "the user asked for a commit" is not the same thing as "the
+         user replied to the profile-click question," naming directly
+         the reasoning that produced both real skips.
+      2. A second, independent layer: before setting
+         `KIRO_AGENT_COMMIT=1`, the agent must state *"Confirming: the
+         user replied '\<exact quote\>' before I proceed"* in its own
+         response — not enforcement (nothing verifies the quote is
+         real), but a deterrent that also makes a skip *legible*: a
+         skip now either produces a fabricated quote (itself then
+         checkable against the real transcript) or an honest
+         admission, rather than silently proceeding with nothing to
+         point to.
+      Added an explicit bridging note so the new "NO EXCEPTIONS"
+      wording doesn't read as contradicting the already-shipped
+      3-attempt fallback (2026-08-27) — that fallback requires the ask
+      to have genuinely happened three times with real (if unclear)
+      replies; it is not a license to skip asking in the first place.
+      Re-stated the "still behavior-dependent, not code-enforced" limit
+      explicitly, tied directly to the two real failures, and named the
+      reverted `PreToolUse` investigation as *why* code-enforcement
+      isn't the fix being reached for right now (it surfaced two more
+      urgent, unrelated bugs first — see the entry above).
+- [x] **Testing — handed off honestly, not fabricated or averaged
+      away.** The request was to ask Kiro to commit 5 separate times
+      across a real session and confirm it asks-and-waits every single
+      time, reporting a single skip plainly rather than softening it.
+      **This cannot be done from this session:** Claude Code has no
+      mechanism to invoke Kiro's own chat agent — the two real skips
+      that prompted this whole entry happened in a separate Kiro
+      session this one has no access to, the same boundary already
+      hit repeatedly (the count-based-fallback test, the PreToolUse
+      diagnostic hook). Fabricating "5 attempts, all passed" would be
+      exactly the kind of unverified claim this project has
+      consistently refused to make all session. Confirmed instead what
+      *is* testable from here: the underlying hook-side mechanics
+      (`$KIRO_AGENT_COMMIT` correctly skipping the terminal prompt,
+      `hook_status=pre-commit-refresh-confirmed-via-chat` logging
+      correctly) already re-verified in the previous entry's revert
+      testing, unaffected by this wording change (no code was touched,
+      only the steering doc). **The actual 5-attempt test needs to be
+      run by a human in a real Kiro session** — this is now the correct
+      next step, not yet done.
+
+## 2026-08-28 (same day, follow-up): new-episode baseline reads also needed a refresh-first ask — added, testing handed off
+- [x] **The gap, stated precisely:** `credits_at_ticket_start` gets
+      read straight from `state.vscdb` the moment a new episode starts
+      (CASE A1's initial ticket assignment, CASE C1's confirmed
+      mid-conversation switch, or a `pending-ticket-check.json` entry
+      getting validated and applied) — with no ask-to-refresh first.
+      `pre-commit`'s existing ask only covers a single commit's own
+      read; a stale *baseline* is worse, since every commit for the
+      rest of that episode computes its delta against that one number.
+      A stale baseline doesn't cost one wrong number, it costs an
+      entire episode's worth of them.
+- [x] **Fixed, three separate insertion points in
+      `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`, each verified
+      unique before patching (same scripted-with-assertions method used
+      for every previous hook-JSON edit this session):** CASE A1
+      (real-ticket-or-explicit-`none` assignment), CASE C1 (confirmed
+      mid-conversation switch), and the PRIORITY CHECK's shape-1
+      handling (a `post-commit`-deferred switch, validated and applied
+      via chat) — each now says explicitly, right before the
+      credit-read command: this establishes a new episode baseline,
+      not a single commit's read; ask "Please click your profile icon
+      to refresh your credits, then let me know when ready" and wait
+      for a real reply *before* running the command; don't treat an
+      earlier commit-time ask as already covering this.
+- [x] **Documented as symmetric, not a reuse of the same check,** in a
+      new steering-doc section right after episode boundaries: two
+      separate asks (baseline-establishment vs. per-commit read),
+      answering one doesn't answer the other, both can legitimately
+      fire close together the first time without being redundant. Same
+      "behavioral, not code-enforced" limit stated explicitly, tied
+      directly to CASE B's two real skips earlier today as the reason
+      not to assume this one is reliable either.
+- [x] **Testing — same honest limitation as every other ask in this
+      document, stated plainly rather than fabricated:** this cannot be
+      tested from this session. Claude Code has no mechanism to invoke
+      Kiro's own chat agent to start a real new episode and observe
+      whether it asks — the same boundary hit on every previous ask-in-
+      chat mechanism this session (the count-based fallback, the
+      `PreToolUse` diagnostic, CASE B's rewrite). The request was to
+      test at least 3 separate new-episode starts and report a single
+      skip plainly, not average it away — that test has not been run.
+      **This needs a human, in a real Kiro session, starting a new
+      episode at least 3 separate times** (a new branch's ask-ticket
+      flow, a confirmed mid-conversation switch, and a validated
+      terminal-switch-deferred-to-chat, ideally all three) and reporting
+      back whether the ask happened, and whether the captured baseline
+      value changed after actually clicking — not yet done.
+
+## 2026-08-28 (same day, follow-up): time tracking added alongside credit tracking — same fixed-baseline/recalculated-delta pattern, real elapsed-time test
+Requested: add a second tracked quantity, elapsed time, following the
+exact same shape as credits — a fixed value captured once when an
+episode starts, and a value recalculated fresh every commit against
+that fixed start.
+
+- [x] **`episode_started_at` added everywhere `credits_at_ticket_start`
+      already gets written**, at the same instant, from the same
+      python process (not a separate `date` call after the fact, so
+      both halves of "this episode's starting point" are captured
+      together): CASE A1, CASE C1, and the PRIORITY CHECK shape-1
+      handling in `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`
+      (each command now prints a 3rd line, the ISO 8601 UTC timestamp,
+      alongside the existing credits/episode_id lines), and
+      `post-commit`'s explicit-"none"-switch branch (same 3-line python
+      command, same JSON write). Verified: JSON valid
+      (`json.load`/`json.dump` round-trip), and the real embedded
+      command extracted and executed directly against the real
+      `state.vscdb`, confirming genuine 3-line output
+      (`265.49` / `ep_6a9122253251e3` / `2026-08-28T05:52:37Z`).
+- [x] **`pre-commit` computes `Kiro-Elapsed-Minutes` fresh every
+      commit** — current time minus `episode_started_at`, in minutes,
+      via `date -u -d` (GNU date, confirmed already relied on
+      elsewhere in this file) parsing the ISO string back to epoch
+      seconds, then `awk` for the (non-integer-safe) subtraction, same
+      reason `$(( ))` isn't used for `CREDITS_DELTA` either. Falls back
+      to the same `"null"`→`"n/a"` convention as credits when
+      `episode_started_at` is missing (e.g. a baseline set before this
+      field existed) — not treated as an error.
+- [x] **`commit-msg` adds two new trailers**, `Kiro-Episode-Started`
+      (the fixed value, `none` fallback) and `Kiro-Elapsed-Minutes`
+      (the recalculated value, `n/a` fallback) — same defaulting
+      pattern as the existing six trailers, verified `bash -n` clean.
+- [x] **`scripts/calculate-pr-credits.sh` now reports both totals per
+      ticket**, using the identical max-per-episode-then-sum logic for
+      elapsed minutes as for credits — deliberately NOT filtered the
+      same way: a commit with a valid `Kiro-Credits` but no
+      `Kiro-Elapsed-Minutes` at all (any commit that predates this
+      feature) still counts fully toward the credits total; only its
+      own contribution to the elapsed total is skipped. A ticket with
+      zero commits carrying real elapsed data reports `n/a` minutes,
+      not a misleading `0.00`, distinguished in the `awk` aggregation
+      via an explicit presence flag rather than trusting a bare `>0`
+      check on the value itself.
+- [x] **Documented as symmetric with credits, not a separate
+      mechanism**, in the steering doc: the existing "Commit message
+      trailer format" block now lists all eight trailers, a new
+      paragraph directly under it ties `Kiro-Episode-Started`/
+      `Kiro-Elapsed-Minutes` explicitly back to
+      `Kiro-Episode`/`Kiro-Credits`, and a new "Time tracking rule"
+      section mirrors "Credit calculation rule" line for line (max per
+      episode, then sum per ticket, same reason raw-summing
+      double-counts).
+- [x] **Tested for real, in an isolated scratch repo, against this
+      repo's real hooks and real `state.vscdb`** (not claimed —
+      real values, both commits, shown below):
+      - Baseline written with a real, live-captured timestamp:
+        `episode_started_at = 2026-08-28T05:59:04Z`,
+        `credits_at_ticket_start = 265.49`.
+      - First commit, made 7 real seconds later
+        (`date -u` confirmed `2026-08-28T05:59:11Z` at commit time):
+        `Kiro-Elapsed-Minutes: 0.12` — matches 7s/60 = 0.1167 → 0.12
+        to 2 decimals, exactly.
+      - Second commit, made at `2026-08-28T06:03:10Z` (real `date -u`
+        reading at commit time) — 4 real minutes 6 real seconds after
+        the baseline, spent genuinely writing this TODO.md entry and
+        the README/steering-doc/runbook updates for this same feature,
+        not simulated or backdated:
+        `Kiro-Elapsed-Minutes: 4.10` — matches 246s/60 = 4.10 exactly,
+        correctly increased from the first commit's `0.12`.
+      - `scripts/calculate-pr-credits.sh --range HEAD` against these
+        two commits (same episode): `TIME-1: 0.0000 credits, 4.10
+        minutes` — correctly the **max** within the episode (`4.10`),
+        not a double-counted sum (`0.12 + 4.10 = 4.22`, which it is
+        NOT).
+      - **Sum-across-episodes also verified for real**, mirroring the
+        credits worked example in `README.md` §4: a third commit on
+        the same ticket under a fresh episode
+        (`episode_started_at` deliberately backdated 2 minutes exactly,
+        via `date -u -d "-2 minutes"`, to get a clean, known second
+        number) produced `Kiro-Elapsed-Minutes: 2.02`. Re-running the
+        aggregation script across all three commits gave
+        `TIME-1: 0.0000 credits, 6.12 minutes` — exactly
+        `4.10 (episode 1's max) + 2.02 (episode 2's max) = 6.12`,
+        confirming max-per-episode-then-sum works correctly for
+        elapsed time, not just credits.
+      - Arithmetic separately sanity-checked in isolation against a
+        known, deliberately backdated 5-minute-30-second-past
+        timestamp (`date -u -d "-5 minutes -30 seconds"`): computed
+        `5.50`, exactly as expected.
+      - **Backward compatibility confirmed against this repo's own
+        real, pre-existing commit history** (not just the scratch
+        repo): running the updated `calculate-pr-credits.sh` against
+        this repo's actual `HEAD` (commits made before this feature
+        existed, no `Kiro-Elapsed-Minutes` trailer at all) correctly
+        reported `n/a minutes` for every one of them
+        (`ANG-123`, `ANG-124`, `none`, `TEST-000`, etc.) while their
+        credits totals were completely unaffected — proving the
+        elapsed-time filter really is independent from the credits
+        filter, not just documented as such.
+
+## 2026-08-28 (same day, follow-up): SonarQube MCP Server connection added — config entry written, live testing blocked on real gaps, not skipped silently
+Requested: connect Kiro to SonarQube via the official MCP Server,
+using a real token once available (explicit instruction: do not
+proceed with a placeholder/fake value), test it live for a real
+project's quality gate status, and test again specifically for
+ANG-4571 on its own branch/commit. Document plainly that this is
+read-only status-checking, not PR-blocking enforcement.
+
+- [x] **Checked the real docs before writing anything, not assumed.**
+      `mcp.sonarqube.com/config-generator.html` only renders its actual
+      JSON client-side (a static fetch can't drive it), so went to the
+      real GitHub README
+      (github.com/SonarSource/sonarqube-mcp-server) instead and
+      confirmed the exact config shape directly: a local-process
+      server via `command`/`args` (Docker, or a local Java JAR), NOT a
+      bare `url` — a real, useful finding, since `docs/runbook.md`'s
+      pre-existing aspirational sketch of this entry showed a
+      fictional `"url": "https://your-sonarqube-host/mcp"` shape that
+      the real server doesn't actually support at all. Also confirmed
+      the real primary tool name for a quality-gate check:
+      `get_project_quality_gate_status` (plus `list_quality_gates`),
+      not a guessed name.
+- [x] **Docker checked directly — not available.** `docker --version`
+      → `command not found`. Per the task's own instruction, checked
+      the documented alternative next instead of stopping there: a
+      standalone JAR launched via `java -jar`, requiring Java 21+.
+      **Also checked directly — also not available:** `java -version`
+      → `command not found`. **Neither of the two documented runtimes
+      for this server exists on this machine right now** — a real,
+      independent blocker on top of the missing token, not a
+      consequence of it. Flagging this plainly rather than writing an
+      entry that looks ready to use but silently can't run.
+- [x] **`.kiro/settings/mcp.json`'s `sonarqube` entry added**,
+      alongside `atlassian-rovo`, using the Docker-based config (the
+      literal shape given in the request, and the server's own
+      documented default) — `SONARQUBE_URL` is the real value given
+      (`https://sonarqube-alcs-saas.teamlease.com`), not a placeholder.
+      `SONARQUBE_TOKEN` is left as an explicit, obviously-fake
+      sentinel, `REPLACE_WITH_REAL_SONARQUBE_USER_TOKEN` — matching
+      this repo's existing convention for a known-missing value
+      (`pre-push`'s `YOUR_PROJECT`/`your-sonarqube-host`), never a
+      value dressed up as real, per the explicit instruction. JSON
+      validated (`json.load`).
+- [x] **Entry written with `"disabled": true`.** Given neither runtime
+      exists on this machine and no real token exists either, an
+      enabled entry would just fail the moment Kiro tried to launch it
+      — disabling it is the accurate state, not an unrequested scope
+      cut. Flip to `disabled: false` once BOTH a real token is set AND
+      one of the two runtimes (Docker, or Java 21+ for the JAR
+      alternative) is installed — either alone is not enough.
+- [x] **`autoApprove` scoped narrowly**, `get_project_quality_gate_status`
+      and `list_quality_gates` only, out of 70+ tools the real server
+      exposes (confirmed via the README, not guessed) — matches item
+      4/5's "read-only check, not enforcement" framing: every other
+      tool (code analysis, issue mutation, admin/webhook tools) still
+      needs explicit per-call approval.
+- [x] **Documentation updated in three places, all describing the same
+      real state, not three different claims:** `docs/runbook.md`'s
+      `.kiro/settings/mcp.json` write-up was rewritten to match the
+      real file (fixing the stale fictional entry noted above) and to
+      state the read-only-not-enforcement distinction and both real
+      blockers explicitly; `README.md` gained a new §6 limitations row
+      distinct from the pre-existing CLI-based `pre-push` SonarQube
+      row (these are two separate mechanisms, not the same gap
+      restated), a new §7 decision entry with the full record, and §5
+      and §8 updates reflecting the real host being provided already
+      and exactly what's still needed (token + a runtime, both
+      required, neither sufficient alone).
+- [ ] **NOT done — stated plainly, not glossed over: no real quality
+      gate status has actually been retrieved through this connection
+      yet.** Two compounding reasons, not one: (1) the connection
+      cannot run at all yet — no real token, no installed runtime;
+      (2) even once both of those are fixed, asking Kiro "what's the
+      quality gate status for [project]?" in chat, and the ANG-4571
+      branch/commit variant of the same test, both require a live Kiro
+      chat turn — the same capability gap noted repeatedly throughout
+      this whole session (CASE B's live testing, the baseline-refresh
+      ask's live testing, the pending-ticket-check chat-side
+      validation). **This needs a human, in a real Kiro session, once
+      a real `SONARQUBE_TOKEN` is provided and Docker or Java 21+ is
+      installed**, to: (a) flip `disabled` to `false`, (b) ask the
+      quality-gate question for a real project key and confirm a real
+      pass/fail comes back (not an error), (c) create a branch for
+      ANG-4571, commit, and confirm the same question resolves for
+      that project through this same connection. None of that has
+      happened — reporting it as not done, not as done-with-caveats.

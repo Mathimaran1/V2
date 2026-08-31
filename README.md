@@ -25,7 +25,9 @@ Jira ticket ──▶ Kiro (asks which ticket, tracks credits) ──▶ git hoo
                                                     commit, stamped with
                                                     Kiro-Ticket/Episode/
                                                     Credits/Confidence/
-                                                    Session/Source trailers
+                                                    Session/Source/Episode-
+                                                    Started/Elapsed-Minutes
+                                                    trailers
                                                                    │
                                           ┌────────────────────────┴──────────────────────┐
                                           ▼                                                ▼
@@ -217,6 +219,49 @@ a different thing from the *baseline* resetting per commit, which
 never happens outside an episode boundary. Worth spelling out plainly
 since those two are easy to conflate.)
 
+**Time tracking (added 2026-08-28) — the exact same pattern, a second
+field.** `Kiro-Episode-Started`/`Kiro-Elapsed-Minutes` mirror
+`Kiro-Episode`/`Kiro-Credits` field for field: `episode_started_at` is a
+fixed ISO 8601 UTC timestamp, captured once — in the same `python3`
+process as `credits_at_ticket_start`, at the same instant, not a
+separate `date` call after the fact — at every point a new episode gets
+established (CASE A1, CASE C1, `post-commit`'s explicit-`none` switch,
+and the PRIORITY CHECK path). `pre-commit` recomputes
+`Kiro-Elapsed-Minutes` fresh every commit — current time minus
+`episode_started_at`, via `date -u -d` back to epoch seconds and `awk`
+for the subtraction (same reason `CREDITS_DELTA` doesn't use bash's
+integer-only `$(( ))`) — the identical "fixed baseline, recalculated
+delta per commit" shape credits already uses, not a separate mechanism.
+Aggregation in `scripts/calculate-pr-credits.sh` uses the identical
+max-per-episode-then-sum logic as credits, for the identical reason
+(cumulative within one episode, not comparable across episodes) — but
+is filtered independently from credits: a commit made before this field
+existed has a valid `Kiro-Credits` but no `Kiro-Elapsed-Minutes` at all,
+and still counts fully toward the credits total; only its own
+contribution to the *elapsed* total is skipped, tracked via an explicit
+presence flag so a ticket with no real elapsed data anywhere reports
+`n/a` minutes rather than a misleading `0.00`.
+
+**Tested for real** in an isolated scratch repo running this repo's
+actual hooks against the real `state.vscdb`: a baseline was written
+with a live-captured `episode_started_at = 2026-08-28T05:59:04Z`; a
+commit made 7 real seconds later (confirmed via `date -u` at commit
+time: `2026-08-28T05:59:11Z`) produced `Kiro-Elapsed-Minutes: 0.12` —
+7s / 60 = 0.1167, correctly rounding to `0.12`. A second commit, made
+4 real minutes 6 real seconds later (genuinely spent writing this
+feature's docs, not simulated), produced `Kiro-Elapsed-Minutes: 4.10`
+— 246s / 60 = 4.10 exactly, correctly increased. A worked
+max-per-episode-then-sum example, mirroring §4's credits one: episode 1
+maxed at `4.10`, a fresh second episode on the same ticket (backdated
+exactly 2 minutes for a clean number) maxed at `2.02`, and
+`calculate-pr-credits.sh` correctly totaled `4.10 + 2.02 = 6.12`, not a
+raw sum of every commit's value. Backward compatibility was also
+confirmed against this repo's own real, pre-existing commit history
+(made before this field existed): every one reports `n/a minutes` while
+its credits total is unaffected. See `TODO.md`'s 2026-08-28
+time-tracking entry for the full real output and the arithmetic sanity
+check against a deliberately backdated timestamp.
+
 **Jira ticket-existence validation — history, corrected twice.**
 Originally (2026-08-26) designed to validate a ticket ID at every point
 one gets set: Kiro's own ask-ticket hook via the `atlassian-rovo` MCP
@@ -354,6 +399,16 @@ each):
   upload was removed entirely 2026-08-25 — see §7, trailers are the
   real source of truth now, this placeholder only remains in the
   SonarQube-gate-result upload inside the still-disabled `pre-push`.
+- `.kiro/settings/mcp.json`'s `sonarqube` entry (added 2026-08-28) —
+  `SONARQUBE_TOKEN` is `REPLACE_WITH_REAL_SONARQUBE_USER_TOKEN`, a
+  real **user** token (not project/global) still needed; entry is
+  `"disabled": true` until it's provided. `SONARQUBE_URL` IS real
+  already (`https://sonarqube-alcs-saas.teamlease.com`, given, not a
+  placeholder). Separately from the token: **neither runtime this
+  server needs is installed on this machine** — no Docker, no Java
+  21+ (both confirmed directly, not assumed — see §7) — so this stays
+  disabled even once a real token arrives, until one of those two is
+  installed too.
 - `infra/pipeline.source.json` → `github.connectionArn` — a real
   CodeStar Connections ARN
 - Legal sign-off on what's tracked, before this goes live for real
@@ -364,7 +419,9 @@ each):
 ```
 .kiro/
   steering/aidlc-git-conventions.md   # rules Kiro always follows
-  settings/mcp.json                   # Jira MCP connection (SonarQube isn't MCP)
+  settings/mcp.json                   # atlassian-rovo (Jira, live), aws (read-only), and
+                                       # sonarqube (added 2026-08-28, disabled: true — no
+                                       # real token, no Docker/Java runtime either, §5/§6)
   hooks/aidlc-ask-for-ticket-if-missing.json  # CASE A + CASE C, plus a PRIORITY CHECK that
                                                # validates a pending REAL ticket typed via
                                                # post-commit's switch prompt (2026-08-27,
@@ -391,7 +448,8 @@ each):
                   # value to Kiro chat for validation (§6); "none" is restored as an
                   # explicit, confirmed switch target, handled immediately (2026-08-27, §7)
   pre-push        # SonarQube gate — disabled with a warning (§6)
-  commit-msg      # stamps all six Kiro-* trailers onto the commit message
+  commit-msg      # stamps all eight Kiro-* trailers onto the commit message (incl.
+                  # Kiro-Episode-Started/Kiro-Elapsed-Minutes, added 2026-08-28, §4)
 .kiro-tracking/    # gitignored — one debug-convenience JSON per ticket, overwritten
                    # each commit (not the source of truth; removed the old
                    # commit-forever accumulation 2026-08-27, see §6)
@@ -425,7 +483,8 @@ item below was confirmed by actually testing it, not inferred.
 | Low-confidence credit numbers counted equally in a ticket's total | **Open — `calculate-pr-credits.sh` never reads `Kiro-Confidence` at all** | Confirmed by reading the actual aggregation logic: it maxes and sums `Kiro-Credits` per `(ticket, episode)` with zero reference to the confidence field anywhere in the script. A stale, low-confidence number sits in the max pool with equal weight to a genuinely fresh one. No fix proposed. |
 | `hook-health.log` has no integrity protection | **Open — and not git-tracked at all** | Deliberately gitignored (it's local diagnostic noise, not the tracking record). Anyone can edit or delete it with zero trace, and it was never shared to begin with. |
 | The credit number's own source is a locally-writable SQLite cache | **Open — structural, root of the trust model** | `state.vscdb` has no signature, no server round-trip check. Whoever controls the laptop controls the number every trailer, delta, and dashboard total ultimately traces back to. |
-| SonarQube quality gate | **Disabled with a loud warning, deliberately** | No real host/token configured yet (`YOUR_PROJECT` / `your-sonarqube-host` placeholders). `pre-push` prints a triple-⚠️ warning on every push while this is true rather than silently skipping. |
+| SonarQube quality gate (CLI-based enforcement, `pre-push`) | **Disabled with a loud warning, deliberately** | No real host/token configured yet (`YOUR_PROJECT` / `your-sonarqube-host` placeholders). `pre-push` prints a triple-⚠️ warning on every push while this is true rather than silently skipping. Separate mechanism from the SonarQube MCP row below — this one would (if enabled) run `sonar-scanner` and could theoretically block a push locally; it still cannot block anything in the AWS PR UI either way. |
+| SonarQube MCP connection (added 2026-08-28, `.kiro/settings/mcp.json`'s `sonarqube` entry) | **`disabled: true` — two independent blockers, confirmed not assumed** | (1) No real `SONARQUBE_TOKEN` yet — placeholder `REPLACE_WITH_REAL_SONARQUBE_USER_TOKEN`, per explicit instruction not to fill with a fake value. (2) Neither runtime the official server needs is installed on this machine: `docker --version` → not found; the Java-JAR alternative needs Java 21+, `java -version` → also not found. **Read-only by design even once enabled** — lets Kiro answer "what's the quality gate status for X?" conversationally (`get_project_quality_gate_status`), does **not** give write access to block a PR in the AWS UI; that remains the separate, still-blocked pipeline work (§8). Live testing (asking Kiro in chat, checking ANG-4571's branch) not done — blocked on both items above, and on this session having no way to invoke a live Kiro chat turn regardless (same limitation as every other chat-dependent ask in this doc). |
 | DuckDB dashboard query still assumes S3 JSON | **Open, flagged not fixed** | The real source of truth moved to commit trailers 2026-08-25; the dashboard design in `docs/runbook.md` hasn't been updated to match — it would need to read commit messages via git/GitHub API instead of (or alongside) S3. |
 | `calculate-pr-credits.sh --repo/--pr` path | **Built, not fully tested** | Verified it fails cleanly against a nonexistent repo/PR; this repo has no real remote PR to test the success path against yet. The `--range` path (local git history) is fully tested. |
 
@@ -738,6 +797,60 @@ actually reached.
   using the real credit-read command, not by watching a live
   conversation.
 
+- **SonarQube MCP Server connection added (2026-08-28) — a new
+  `sonarqube` entry in `.kiro/settings/mcp.json`, alongside
+  `atlassian-rovo`, using the config format from
+  [mcp.sonarqube.com/config-generator.html](https://mcp.sonarqube.com/config-generator.html)
+  and confirmed against the real
+  [GitHub README](https://github.com/SonarSource/sonarqube-mcp-server)
+  rather than assumed:** the official server takes a `command`/`args`
+  local-process config (Docker or a local Java JAR), not a bare `url`
+  the way `atlassian-rovo` does — a real difference from the earlier,
+  now-corrected aspirational sketch of this entry in `docs/runbook.md`
+  (which showed a fictional `"url": "https://your-sonarqube-host/mcp"`
+  shape that the real server doesn't support at all).
+  - **Docker checked directly, not assumed available:** `docker
+    --version` → `command not found`. Per the task's own instruction,
+    checked the documented alternative next rather than stopping there:
+    a standalone JAR run via `java -jar`, requiring Java 21+. Also
+    checked directly: `java -version` → `command not found` too.
+    **Neither of the two documented runtimes exists on this machine
+    today** — this is independent of, and in addition to, not having a
+    real token yet.
+  - **Token:** left as an explicit, obviously-fake placeholder
+    (`REPLACE_WITH_REAL_SONARQUBE_USER_TOKEN`) — matching this repo's
+    existing convention for values that are known-missing rather than
+    forgotten (`pre-push`'s `YOUR_PROJECT`/`your-sonarqube-host`) — per
+    explicit instruction not to substitute a fake-but-plausible value.
+    The **URL** is real already, provided directly
+    (`https://sonarqube-alcs-saas.teamlease.com`), not a placeholder.
+  - **Entry written with `"disabled": true`.** An entry that Kiro
+    would actually try to launch, on a machine with neither runtime
+    installed and no real credential, would just fail loudly and
+    unhelpfully the moment Kiro tried to use it — disabling it until
+    both real blockers clear is the honest state to leave it in, not a
+    scope decision.
+  - **`autoApprove` deliberately narrow:** `get_project_quality_gate_status`
+    and `list_quality_gates` only — confirmed via the real README that
+    the server exposes 70+ tools total (code analysis, issue mutation,
+    webhook/admin tools, etc.); this connection's whole purpose is a
+    read-only conversational status check, not broader SonarQube
+    control, so nothing else is pre-approved.
+  - **Live testing (asking Kiro "what's the quality gate status for
+    [project]?"; the ANG-4571 branch/commit variant) was not done.**
+    Blocked on the token and the runtime above, and — independently of
+    either — on this session having no mechanism to invoke a live Kiro
+    chat turn at all, the same limitation noted repeatedly earlier in
+    this document for every other chat-dependent ask. Stated plainly,
+    not glossed over: **no real quality gate status has been retrieved
+    through this connection yet.**
+  - **Documented as read-only, not enforcement, in three places**
+    (`.kiro/settings/mcp.json`'s `docs/runbook.md` write-up, this
+    section, and §6's new SonarQube MCP row): checking a PR's quality
+    status conversationally is not the same as blocking a bad PR in
+    the AWS PR UI — that still needs the separate, AWS-write-access-
+    blocked pipeline work (§8), unaffected by this connection existing.
+
 ## 8. What's still open
 
 **Fixable with code, no external blocker:**
@@ -774,8 +887,23 @@ actually reached.
 - Where this repo actually lives — personal GitHub account vs. a company-owned org (same question affects who can see the tracking data at all)
 - Redacting the AWS account ID in `docs/source-repo-decision.md` before any public push
 - Legal sign-off on what's tracked, before turning this on for real
-- Provisioning a real SonarQube host/token
+- Provisioning a real SonarQube **token** — the host is real already
+  (`https://sonarqube-alcs-saas.teamlease.com`, given 2026-08-28); only
+  the user token for the new `sonarqube` MCP entry is still a
+  placeholder (§5/§6/§7)
+- Installing Docker (or Java 21+, the documented alternative runtime)
+  on this machine — the new `sonarqube` MCP entry needs one of the two
+  to actually run at all, confirmed neither is present today (§6/§7);
+  this is independent of the token above, not solved by it
 - Authorizing a real CodeStar Connections ARN for the GitHub↔CodePipeline link
+
+**Blocked on live Kiro chat testing (same limitation as every other
+chat-dependent ask in this doc, restated here for the newest case):**
+- Asking Kiro "what's the quality gate status for [project]?" through
+  the new SonarQube MCP connection, and the ANG-4571 branch/commit
+  variant of the same test — cannot be exercised from this session
+  even once the token and a runtime are both in place; needs a human
+  in a real Kiro session (§6/§7)
 
 ## 9. Testing philosophy
 
