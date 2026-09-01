@@ -137,10 +137,27 @@ except Exception:
   fi
 fi
 
-# Ticket already set, a pending Jira validation is in flight, or the
-# agent hook is mid-way through a "refresh credits, then confirm" wait —
-# all three need the real agent hook. Let the prompt through untouched.
-if [ -n "$TICKET_ID" ] || [ -f .kiro/pending-ticket-check.json ] || [ -f .kiro/pending-baseline-confirm.json ]; then
+# --- Option A1 (docs/deterministic-bookkeeping-proposal.md, added
+# 2026-09-01): don't rely on the agent to fetch and correctly weigh
+# current-ticket.json's actual content against its own priors — feed
+# the real value directly into context, unconditionally, the same
+# proven exit-0-stdout mechanism FUZZY_TICKET_MATCH already uses below.
+# Confirmed live 2026-09-01: a fresh session's first message, with
+# ticket_id genuinely set to a real ticket, still got answered as if it
+# were empty — the agent's own Read File call happened but its content
+# got overridden by a "new session -> probably nothing tracked" prior.
+# This closes that gap by not requiring the agent to go fetch the fact
+# at all; it's just already sitting in context before reasoning starts.
+if [ -n "$TICKET_ID" ]; then
+  echo "CURRENT_TRACKED_TICKET: $TICKET_ID (read directly from current-ticket.json by this command hook, not by you — trust this value over any assumption about session freshness)"
+  exit 0
+fi
+
+# A pending Jira validation is in flight, or the agent hook is
+# mid-way through a "refresh credits, then confirm" wait — both need
+# the real agent hook. Let the prompt through untouched, no note
+# needed (ticket_id is empty in this branch, nothing to report).
+if [ -f .kiro/pending-ticket-check.json ] || [ -f .kiro/pending-baseline-confirm.json ]; then
   exit 0
 fi
 
