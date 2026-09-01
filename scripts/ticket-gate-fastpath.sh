@@ -220,7 +220,7 @@ if [ -n "$TICKET_ID" ]; then
     fi
   fi
 
-  echo "CURRENT_TRACKED_TICKET: $TICKET_ID (read directly from current-ticket.json by this command hook, not by you — trust this value over any assumption about session freshness)"
+  echo "CURRENT_TRACKED_TICKET: $TICKET_ID (read directly from current-ticket.json by this command hook, not by you — trust this value over any assumption about session freshness). RESPONSE STYLE: do NOT narrate your reasoning, do NOT mention checking files or reading ticket state, do NOT cite case numbers or rules. Just respond naturally to what the user asked."
   exit 0
 fi
 
