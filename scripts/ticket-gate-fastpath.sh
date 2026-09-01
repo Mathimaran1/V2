@@ -163,6 +163,19 @@ fi
 
 # Ticket is empty. Is this message itself a candidate answer?
 if echo "$PROMPT" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$' || [ "$PROMPT" = "none" ]; then
+  # docs/case-a1-marker-fix-proposal.md, added 2026-09-01: write the
+  # marker (WITH the candidate ticket_id) ourselves, right here, the
+  # moment a candidate is detected — don't leave it to the agent's own
+  # prose instruction to remember (confirmed live: it didn't, twice —
+  # TODO.md). This code path only runs when no marker exists yet (line
+  # 160 above already exits early on any later turn), so there's no
+  # clobber risk. PROMPT is safe to embed unquoted in the python
+  # literal below — it already matched the strict regex, or is the
+  # literal string 'none'; no quotes/apostrophes possible in either.
+  python3 -c "
+import json
+json.dump({'awaiting': True, 'ticket_id': '$PROMPT'}, open('.kiro/pending-baseline-confirm.json', 'w'))
+"
   exit 0  # exact match — needs Jira validation, hand off to agent hook
 fi
 
@@ -185,6 +198,15 @@ NORMALIZED=$(echo "$PROMPT" \
   | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]*-[[:space:]]*/-/' \
   | tr '[:lower:]' '[:upper:]')
 if echo "$NORMALIZED" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
+  # docs/case-a1-marker-fix-proposal.md, added 2026-09-01: same
+  # write-it-ourselves fix as the exact-match branch above, using the
+  # normalized candidate (also regex-validated safe to embed) — this
+  # is what's being confirmed by the "Did you mean X?" question, so
+  # it's what the marker should carry.
+  python3 -c "
+import json
+json.dump({'awaiting': True, 'ticket_id': '$NORMALIZED'}, open('.kiro/pending-baseline-confirm.json', 'w'))
+"
   # exit 0 → stdout (not stderr) is what Kiro adds to the agent's
   # context, per kiro.dev/docs/hooks/actions/ — stderr is only read on
   # a non-zero exit, which this isn't.

@@ -2340,3 +2340,96 @@ read-only status-checking, not PR-blocking enforcement.
   named the final task of the session regardless of outcome. It
   happened to pass every case; nothing further planned until picked up
   next time.
+
+## 2026-09-01 (same session, follow-up): CASE A1 marker fix (docs/case-a1-marker-fix-proposal.md) built, live-tested 9/9 cases + 1 follow-up fix, one design claim caught wrong by testing and corrected
+- [x] **Built exactly as proposed, scope confirmed by code trace before
+      touching anything:** `scripts/ticket-gate-fastpath.sh` now writes
+      `.kiro/pending-baseline-confirm.json` itself (WITH `ticket_id`) at
+      the exact point it already deterministically detects a CASE A1
+      candidate (exact match, `'none'`, or fuzzy match) — two new
+      `python3 -c` blocks, no new capability. `aidlc-ask-for-ticket-if-
+      missing.json` got 7 targeted prompt edits (verified each matched
+      exactly once before replacing): stop telling the agent to write
+      the marker for A1's two sub-paths, read `ticket_id` from it
+      instead of memory, delete it on the new "ticket doesn't exist"
+      rejection path, update it on decline-with-alternative, and (added
+      mid-session, see below) update it on any A1 re-entry with a
+      mismatched stale value. CASE C1 and PRIORITY CHECK's own prose
+      instructions untouched — confirmed by code trace they don't need
+      this (C1 exits at line 151–154 before ever reaching the marker
+      check; PRIORITY CHECK is independently backed by `pending-ticket-
+      check.json`, checked in the same `||` condition).
+- [x] **State check done first, as instructed, before any building:**
+      found `current-ticket.json` NOT absent (`ANG-4571`, real, left
+      untouched throughout) and two unplanned commits from the user's
+      live Kiro session — see the entry directly above this one for
+      that finding (set aside, not part of this build).
+- [x] **Tests 1–8: all PASS, real file state checked after every one,**
+      run in an isolated scratch copy (`scripts/` + a fake `.kiro/`) so
+      the live `ANG-4571` state was never touched — confirmed via direct
+      `cat`/`git log` before, during, and after:
+      1. Exact match → marker `{"awaiting": true, "ticket_id":
+         "ANG-123"}` written before any agent turn.
+      2. Full flow → `current-ticket.json` correctly gets `ANG-123`
+         (read from the marker per the new instruction, not memory);
+         markers gone after.
+      3. **Direct replay of the original transcript's exact shape**
+         (same ticket, same confirmation word `"done"`, same turn
+         count): turn 3 now produces exit 0 and NO output at all — the
+         original bug (re-asked question, exit 2) does not reproduce.
+      4. Fuzzy match → marker carries the NORMALIZED value (`ANG-123`
+         from `"ang - 123"`), not the raw text.
+      5. Rejection → marker created then correctly deleted; the next
+         real candidate gets a clean, correct marker afterward.
+      6. **Negative test, CASE C1:** byte-identical script output/exit
+         with the marker present vs. absent — confirms it structurally
+         never looks.
+      7. **Negative test, PRIORITY CHECK:** same — byte-identical
+         either way, confirms `pending-ticket-check.json` alone already
+         covers it.
+      8. **Decline-with-alternative:** confirmed live that the command
+         hook genuinely cannot detect `"no ANG-4571"` as a new candidate
+         (correctly silent, matches the intentional `NOANG-4571`
+         false-positive guard) — the agent-side bundled update command
+         from the design correctly fixes the marker when applied.
+- [ ] **Test 9 — NOT a clean pass, a real finding that the design doc's
+      own claim was wrong, caught by testing rather than asserted.** The
+      proposal claimed a skipped rejection-branch deletion was "bounded
+      and self-correcting the moment a new candidate arrives." Tested
+      directly: it is NOT. A stale marker (fake ticket, cleanup
+      skipped) was still showing the OLD ticket_id after a real,
+      different candidate arrived on a later turn — `grep`-confirmed on
+      disk, not inferred. Root cause: `pending-baseline-confirm.json`'s
+      existence check on line 160 exits before the exact/fuzzy-match
+      detection logic runs again, so nothing ever gets the chance to
+      overwrite a stale marker at the command-hook level. Also flagged
+      a secondary risk this interacts with: Edit E tells the agent to
+      trust the marker's `ticket_id` over its own memory — a stale
+      marker plus that instruction could make the agent write the
+      WRONG ticket ID for a fresh candidate.
+- [x] **Fixed the same session, re-tested, closes it:** generalized the
+      decline-with-alternative pattern (already approved) to CASE A1's
+      entry point generally — any re-entry into A1 matching now updates
+      the marker's `ticket_id` to the current message's candidate
+      whenever it doesn't already match, before doing anything else.
+      Re-ran test 9's exact scenario with this applied: the stale
+      marker correctly gets overwritten to the new real candidate.
+      Re-ran test 5 (rejection+cleanup) to confirm no regression — still
+      passes. Still prose-dependent (command hook structurally cannot
+      see this case, confirmed) — same class of honest limitation as
+      decline-with-alternative itself, not a new one.
+- [x] **Design doc corrected to match what testing actually found,**
+      not left standing as originally written — `docs/case-a1-marker-
+      fix-proposal.md`'s "self-correcting" claim rewritten to state
+      plainly it was tested and found false, and how it was actually
+      closed.
+- [x] **Real repo state confirmed untouched throughout, checked
+      directly before and after every test batch:** `current-ticket.json`
+      still `ANG-4571`, `pending-baseline-confirm.json` still absent,
+      git log unchanged from the entry above. All testing done in an
+      isolated scratch copy specifically to make this possible without
+      touching live state.
+- **9 cases run, 8 clean passes, 1 caught-and-fixed-same-session — same
+  pass bar as everything else tonight: a single failure (test 9) was
+  treated as exactly that, not smoothed over, fixed, and re-verified
+  before calling this done.**
