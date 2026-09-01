@@ -108,6 +108,23 @@ INNER_EOF
     # explicit confirmation message, exactly like a real ticket would
     # get.
     #
+    # --- Uncommitted-work check (added 2026-09-01, ANG-4571). Before
+    # switching, verify the working tree is clean — any uncommitted
+    # changes done under the OLD ticket would end up committed under
+    # the NEW episode if the user forgets. This is a warning, not a
+    # hard block: the user already committed (we're in post-commit),
+    # but may have made new changes since. If dirty, warn and abort
+    # the switch; current-ticket.json stays untouched.
+    DIRTY_FILES=$(git status --porcelain 2>/dev/null)
+    if [ -n "$DIRTY_FILES" ]; then
+      echo "⚠️  You have uncommitted changes — please commit or stash your work before" >&2
+      echo "   switching tickets, so it gets tracked under the right ticket." >&2
+      echo "   NOT switching. current-ticket.json left untouched." >&2
+      echo "" >&2
+      echo "   Dirty files:" >&2
+      echo "$DIRTY_FILES" | sed 's/^/   /' >&2
+    else
+    #
     # Time tracking, added 2026-08-28 — same pattern as credits: a
     # fixed start value (episode_started_at, captured once here,
     # alongside credits_at_ticket_start) plus a recalculated-per-commit
@@ -137,6 +154,7 @@ print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
     else
       echo "⚠️  Could not read the current credit baseline — NOT switching, current-ticket.json left untouched." >&2
     fi
+    fi  # end of clean-working-tree else block (ANG-4571)
   else
     echo "No ticket entered — staying on the current ticket." >&2
   fi

@@ -2,7 +2,7 @@
   "version": "v1",
   "hooks": [
     {
-      "name": "Empty-ticket fast path (command, no agent) — blocks cheaply before aidlc-ask-for-ticket-if-missing.json's agent hook has to",
+      "name": "Ticket fast path",
       "trigger": "UserPromptSubmit",
       "action": {
         "type": "command",

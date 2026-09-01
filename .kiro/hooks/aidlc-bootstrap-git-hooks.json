@@ -2,7 +2,7 @@
   "version": "v1",
   "hooks": [
     {
-      "name": "aidlc-bootstrap-git-hooks (command, no agent) — checks .githooks/pre-commit exists + core.hooksPath is set; silent no-op if so (the common case, every save), restores from HEAD if not",
+      "name": "Bootstrap git hooks",
       "trigger": "PostFileSave",
       "action": {
         "type": "command",

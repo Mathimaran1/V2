@@ -2257,6 +2257,545 @@ read-only status-checking, not PR-blocking enforcement.
       that project through this same connection. None of that has
       happened — reporting it as not done, not as done-with-caveats.
 
+## 2026-08-31: CASE C had no fuzzy-match rule of its own — an already-tracked ticket got silently re-baselined, ask-and-wait skipped
+Found by a human manually running a real Kiro session against
+`aidlc-ask-for-ticket-if-missing.json` (`ANG-4571` tracked → typed
+`amd-12` fuzzy-matching a fake ticket → declined via a failed Jira
+validation → retyped `ANG-4571`, the SAME ticket already tracked).
+- [x] **The observed symptom:** the profile-click ask ("Please click
+      your profile icon to refresh your credits, then let me know
+      when ready") was skipped entirely on the final turn — the agent
+      went straight from reading `current-ticket.json` to running the
+      credit-read command to writing a brand new `episode_id` and
+      `credits_at_ticket_start`, for a ticket that had never actually
+      been unset. This is the same class of skip fixed twice already
+      (see the two 2026-08-28 entries above), but neither of those
+      fixes touched this path, because the real cause here isn't
+      weak wording on the ask itself.
+- [x] **Root cause, traced precisely:** CASE C2 (the mid-session
+      switch-detection check) only ever defined an EXACT regex match
+      (`^[A-Z][A-Z0-9]*-[0-9]+$`) for recognizing a mentioned ticket.
+      CASE A1 has an explicit fuzzy-match rule (added 2026-08-27) for
+      exactly this kind of input; CASE C2 never got the same
+      treatment. `amd-12` (lowercase) hit that gap — the agent had no
+      rule to follow, so it improvised, answering with (A1)'s "Did you
+      mean AMD-12?" phrasing without doing either case's real
+      bookkeeping (never wrote `pending_switch_to`). With no marker
+      written, the next turn had nothing to bind to — (C1) never
+      fired, and the retyped `ANG-4571` fell through to ad hoc
+      behavior that treated it as a fresh baseline-worthy event,
+      skipping the ask in the process.
+- [x] **Fixed in `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`,
+      CASE C2, two layers, both closing the actual gap rather than
+      re-wording the ask that was never reached this way before:**
+      1. CASE C2 now explicitly normalizes the message itself
+         (whitespace/case, same as A1) when the exact regex doesn't
+         match — spelling out that the fastpath command hook does
+         NOT do this for CASE C (it exits untouched whenever
+         `ticket_id` is already set — see
+         `scripts/ticket-gate-fastpath.sh`), so this can't be silently
+         assumed to be handled upstream.
+      2. Before treating any candidate (exact or normalized) as a
+         switch, CASE C2 now checks whether it exactly equals the
+         `ticket_id` already saved — if so, it's not a switch at all,
+         just a re-statement of the current ticket. No
+         `pending_switch_to` write, no switch-confirmation question,
+         no baseline/episode re-capture, no ask. This is the guard
+         that actually closes the bug: however a same-ticket mention
+         gets recognized (typo-fuzzy detour or not), it can no longer
+         fall through into baseline-capture territory at all.
+- [x] **Testing — same honest limitation as every other chat-side ask
+      in this document:** this fix is a prompt-text change to an
+      agent-type hook; it cannot be exercised from this session
+      (Claude Code has no mechanism to invoke Kiro's own chat agent).
+      The bug itself, however, unlike the two 2026-08-28 entries, WAS
+      independently confirmed live by a human before this fix was
+      written — not inferred. **Still needs a human, in a real Kiro
+      session, to re-run the same sequence** (track a real ticket,
+      attempt a switch to a ticket that fails Jira validation, then
+      retype the original already-tracked ticket) and confirm the ask
+      is no longer skipped — not yet done.
+
+## 2026-08-31 (same day, follow-up): process narration leaking into the visible chat response outside the A2 question — general guard added
+Found the same session, on a different real turn: while processing a
+real CASE A1 ticket validation (`ANG-4571`), the visible chat response
+included lines like "This is CASE A1...", "Priority check file
+doesn't exist, so I skip to CASE A1 processing", and "Got the
+cloudId... Now I need to validate ANG-4571" — a step-by-step narration
+of the agent's own internal branching and tool-call plan, shown to the
+user as if it were the answer.
+- [x] **Not a new problem, an old one recurring somewhere the existing
+      fix didn't reach.** The HARD GATE paragraph already forbids
+      exactly this kind of narration — but only for the A2 branch
+      (the bare ticket question). It never said the same thing for
+      A1's Jira-validation processing, C1/C2, or the PRIORITY CHECK,
+      so nothing stopped it from showing up there too.
+- [x] **Fixed:** added a new top-level "NARRATION GUARD" paragraph to
+      `.kiro/hooks/aidlc-ask-for-ticket-if-missing.json`, same
+      standing as HARD GATE and COST GUARD (applies on every message,
+      every case) — no play-by-play of which branch/tool/file is
+      about to run; the visible response should only ever be what the
+      user actually needs (the question, a validation result, the
+      profile-icon ask, the final confirmation, or the real answer).
+- [x] **Same live session, more evidence — the leak wasn't confined to
+      the validation step.** The rest of that same CASE A1
+      walkthrough (the same human, continuing the same test) showed
+      identical narration at every remaining step: resuming once the
+      user confirmed the profile-icon refresh ("The user has
+      confirmed they're ready. Now I need to read the credits..."),
+      after running the baseline command ("Got the baseline: ..."),
+      before the `current-ticket.json` write ("Now I'll write..."),
+      and before deleting the marker file ("Now I need to delete the
+      marker file"). Strengthened the NARRATION GUARD paragraph with
+      these exact phrases as additional named examples, so the rule
+      reads as covering the whole flow end-to-end — not just
+      branch-selection at the start — matching the pattern already
+      used for CASE B's profile-click ask (generic wording alone
+      wasn't enough there either; specific named failure phrases were
+      what actually closed it).
+- [x] **Testing — same limitation as every other prompt-wording fix in
+      this document:** cannot be exercised from this session. Both
+      rounds of this bug were independently confirmed live by a
+      human, not inferred. **Still needs a human, in a real Kiro
+      session, to re-run a full CASE A1 walkthrough end-to-end and
+      confirm no process narration appears at any step** — not yet
+      done.
+
+## 2026-08-31 (same day, follow-up): credit-cost investigation for the ticket-tracking hooks — one fix shipped and verified, one ruled out with evidence, one blocked, one real alternative proposed (not implemented)
+Requested: after a real ticket-switch (via `aidlc-ask-for-ticket-if-missing.json`)
+cost ~2.06 credits across three forced turns, reduce that cost. Four
+options were scoped: **#1** skip the ticket-flow hook's work via a
+command-hook block when no ticket is mentioned; **#2** validate Jira
+existence via a direct REST call, bypassing the `atlassian-rovo` MCP
+connection; **#3** move credit-baseline capture from chat-time to
+first-commit time; **#4** stop re-fetching the Jira cloudId within a
+conversation that already has it.
+- [x] **#4 shipped in `aidlc-ask-for-ticket-if-missing.json` (CASE A1
+      and C1 now reuse a cloudId already confirmed earlier in the same
+      conversation instead of re-calling
+      `getAccessibleAtlassianResources`) — and VERIFIED LIVE, not just
+      implemented, same standard as every other "tested live" entry in
+      this file.** Real transcript, two validations in one
+      conversation: (1) `none` — no Jira call needed, 0.47 credits;
+      (2) `ANG-123` — Kiro explicitly stated *"I already have the
+      cloudId from earlier: 95d1d0d9-87db-4e3a-964d-a485e6e75c4c"* and
+      went straight to `getJiraIssue`, no
+      `getAccessibleAtlassianResources` call. 1.03 credits (higher
+      than the first turn because this one did real validation +
+      baseline capture — not a like-for-like comparison — but the
+      absence of the redundant resource-discovery call is the actual
+      thing being verified here, and it's confirmed absent).
+- [x] **#2 checked and ruled out as a real blocker, not a "should
+      work" assumption — confirmed without needing a live Kiro
+      session at all.** `.kiro/settings/mcp.json`'s `atlassian-rovo`
+      entry (what chat actually uses) is a hosted OAuth endpoint
+      (`https://mcp.atlassian.com/v1/mcp/authv2`) with no
+      `JIRA_BASE_URL`/`EMAIL`/`API_TOKEN` fields at all — that's not
+      how it authenticates. Those specific env vars are independently
+      confirmed absent everywhere checked: this shell's environment,
+      `~/.bashrc`/`~/.profile`/`~/.zshrc`, and the systemd user
+      environment — matching `.githooks/post-commit`'s own comment
+      from the 2026-08-27 revert of this exact idea in the git-hook
+      context: *"provisioned nowhere in this repo, confirmed by
+      checking the environment directly."* Not building a REST
+      validator around credentials that don't exist. Dropped.
+- [x] **#1 as originally scoped is architecturally impossible — ruled
+      out via Kiro's own documentation, not a live-test result.**
+      Fetched `kiro.dev/docs/hooks/actions/`: for the Prompt Submit
+      trigger specifically, an Agent Prompt hook's text is *"appended
+      to the user prompt, and the combined prompt is sent to the
+      agent"* as ONE request — there is no separate sibling agent-hook
+      turn for a command hook to suppress in the first place. A
+      command hook's only lever on this trigger is `exit 2` (full
+      block, confirmed by the same docs: *"message submissions are
+      blocked"*) — correct for CASE A2 (nothing else to say) but wrong
+      for CASE C2's "proceed normally" case, where blocking would
+      swallow the user's real request instead of answering it. Ruled
+      out as scoped; no code changed for this one.
+- [ ] **Real alternative for #1 proposed, not implemented — see
+      `docs/hook-dispatcher-proposal.md`.** The actual cost driver is
+      that the full ~30KB instruction block gets appended to every
+      single message once a ticket is tracked, regardless of whether
+      that turn needs any of it (confirmed by the same docs quote
+      above). Proposed fix: split the hook into a short always-inline
+      dispatcher plus an on-demand detail file
+      (`.kiro/hooks/ticket-flow-details.md`) read only when the
+      dispatcher's triage decides ticket-handling work is actually
+      needed. Deliberately NOT implemented yet — it introduces a new
+      *silent* failure mode (the model judges a turn as "nothing
+      needed" and skips reading the details file when it actually
+      should have), which needs an explicit adversarial live test
+      before shipping, not just a plausible design. See the proposal
+      doc for the full design, the test cases, and the rollback plan.
+- [ ] **#3 still held, unchanged from the prior entry** — needs real
+      usage-gap numbers (ticket-selection-to-first-commit timing
+      across a few real sessions) before it's a decision made with
+      evidence, not just cost savings. Not touched this round.
+
+## 2026-08-31 (same day, follow-up): dispatcher/detail-file split (docs/hook-dispatcher-proposal.md) implemented, tested live, FAILED, rolled back
+- [x] **Implemented as designed:** `aidlc-ask-for-ticket-if-missing.json`
+      shrunk from ~30.7KB inline to a ~2.2KB dispatcher prompt; the full
+      original procedure moved unchanged to a new
+      `.kiro/hooks/ticket-flow-details.md`, read via a tool call only
+      when the dispatcher's triage judged it necessary. Pre-split
+      content backed up per the proposal's rollback plan before
+      touching anything.
+- [ ] **Live-tested — FAILED, real regression, not a subtle miss.**
+      A human ran this in a real Kiro session (`ANG-4571` tracking
+      flow, the exact same flow priced at ~1.05 credits across two
+      turns pre-split earlier this session). Post-split: turn 1
+      (`ANG-4571`) hit **"the agent context limit"** mid-turn and got
+      auto-summarized by Kiro itself (0.4 credits, incomplete); turn 2
+      (`done`, continuing the same flow) cost **1.28 credits** on its
+      own. Total for one ticket-tracking flow: **~1.68 credits, higher
+      than the ~1.05 pre-split baseline for the same flow** — the
+      opposite of the intended effect. Directly reported by the human:
+      *"its getting more now than previous one."*
+- [x] **A likely mechanism, not fully isolated:** reading the ~30KB
+      detail file via a tool call is not free the way inline prompt
+      text was — the tool-call overhead itself, plus the agent
+      apparently adopting Kiro's own multi-step Task List
+      tool to track the now-file-delivered procedure (one turn alone
+      showed 14 tool calls, most of them Task List updates), plus the
+      cost of the mid-turn auto-summarization event, likely compound
+      to something worse than the original flat ~30KB-inline cost.
+      This was a real possibility the proposal didn't weight heavily
+      enough — "roughly the same cost for turns that need the detail
+      file" turned out to be optimistic, not measured.
+- [x] **Also confirmed live, independent of the cost regression:** the
+      NARRATION GUARD violation recurred in BOTH post-split turns
+      ("Understood. Let me check the current state..." and "User
+      confirmed ready. Now reading the credit baseline..."), right
+      after the context-limit summarization event — supporting (not
+      proving) the theory that Kiro's own auto-summarization is lossy
+      against behavioral rules like this one, independent of the
+      split itself.
+- [x] **Rolled back immediately per the proposal's own pass bar** ("any
+      single failure blocks shipping" — this wasn't even a narrow
+      miss). `aidlc-ask-for-ticket-if-missing.json` restored verbatim
+      from the pre-split backup; `ticket-flow-details.md` and the
+      `.bak` deleted. Repo is back to the exact pre-split state.
+      **Conclusion: the dispatcher/detail-file split, as designed, is
+      not a viable cost fix — do not re-attempt this exact approach
+      without first understanding the tool-call/Task-list overhead
+      mechanism above, not just re-shrinking the inline text.**
+
+## 2026-08-31 (same day, follow-up): two new cost ideas investigated and proposed — not implemented
+Requested after the dispatcher-split failure: two new approaches,
+proposal-only, same discipline as that failed attempt — investigate
+feasibility against real Kiro behavior first, don't build on
+assumptions.
+- [ ] **Idea 1 — local Jira validation cache, see
+      `docs/validation-cache-proposal.md`.** A ticket only needs
+      existence-validating once; cache the result
+      (`.kiro/validated-tickets.json`) and skip the
+      `getAccessibleAtlassianResources`/`getJiraIssue` calls on a
+      cache hit via the same proven command-hook
+      stdout-to-agent-context mechanism already used for
+      `FUZZY_TICKET_MATCH`. Correctly scoped as saving the two Jira
+      tool calls within a turn that still happens, not the whole
+      turn — confirmed via the same docs quote that closed out the
+      dispatcher-split (`Prompt Submit` always appends the hook's
+      prompt into one combined request). Estimated real savings,
+      from this session's own transcripts: ~0.3–0.6 credits per cache
+      hit. Not implemented; needs the live test plan in the proposal
+      doc first.
+- [ ] **Idea 2 — shrink chat's job to validation only, see
+      `docs/chat-validation-only-proposal.md`.** Confirmed the
+      underlying mechanism already works in production today —
+      `post-commit`'s `"none"` switch path already captures a full
+      credit baseline and writes `current-ticket.json` from a
+      terminal git hook, zero agent cost, using the same
+      `python3`/`sqlite3` snippet used everywhere. **Important finding:
+      as literally scoped (pickup via a git hook), this reintroduces
+      #3's exact open question** — baseline timing shifts from
+      ticket-selection time to next-commit time — and should not be
+      built under a different name while #3 itself is on hold for
+      evidence. Proposed a stronger alternative instead: do the
+      pickup in the command hook (`ticket-gate-fastpath.sh`) on the
+      very next chat message rather than waiting for a commit,
+      preserving today's baseline-timing meaning while still moving
+      the ask/wait/capture/write sequence to zero-cost territory.
+      Combined with Idea 1, estimated to cut a full switch from
+      ~2.06 credits to roughly ~0.7 (cache miss) or near-zero (cache
+      hit). Not implemented; the multi-step marker handoff is a new
+      mechanical pattern (even though every individual piece is
+      separately proven elsewhere) and needs the live test plan in
+      the proposal doc, particularly the interrupted-flow/stuck-marker
+      case, before it ships.
+- [x] **Both proposals explicitly flag their failure modes and a live
+      test plan up front, learning directly from the dispatcher-split
+      miss** — no implementation happens until a human runs those
+      tests in a real Kiro session and reports real numbers back, same
+      standard as everything else in this file.
+
+## 2026-09-01: Idea 1 (validation cache) built, live-tested twice, FAILED both times on a correctness regression, rolled back
+Approved and built per `docs/validation-cache-proposal.md`: a cache
+file (`.kiro/validated-tickets.json`), a read-side check added to
+`scripts/ticket-gate-fastpath.sh`, and write/skip instructions added
+to CASE A1/C1 of `aidlc-ask-for-ticket-if-missing.json`.
+- [ ] **Live test round 1 — FAILED. A ticket (`ANG-4571`) was accepted
+      as validated with ZERO `getAccessibleAtlassianResources`/
+      `getJiraIssue` calls in the transcript, and the profile-icon
+      refresh-ask never appeared before baseline capture.** Root cause
+      investigation found the cache file's entries were timestamped a
+      full day before the caching code existed — meaning whatever
+      wrote them did not read a real clock. Traced to the exact class
+      of bug this project already learned to avoid once (the
+      credits-baseline read): the write instruction said "use the
+      current UTC timestamp" as free text, with no bundled
+      deterministic command, so the model could — and did — write a
+      stale value instead of actually checking the time. Two fixes
+      applied: (1) bundled a real `date -u +%Y-%m-%dT%H:%M:%SZ` call
+      into both write points, replacing the free-text instruction
+      entirely; (2) rewrote the cache-hit skip instruction to
+      explicitly scope it to ONLY the two Jira tool calls, stating in
+      the same sentence that the refresh-ask is a separate requirement
+      unaffected by a cache hit. Cache wiped before retesting so no
+      pre-fix entry could contaminate the result.
+- [ ] **Live test round 2 — FAILED AGAIN, more seriously.** Switching
+      to `ANG-123` with the cache file confirmed genuinely absent
+      (checked directly, not assumed) still produced zero Jira tool
+      calls. This is strictly worse evidence than round 1: with no
+      cache file, `ticket-gate-fastpath.sh`'s cache block cannot fire
+      at all (confirmed by its own gate, `[ -f "$CACHE_FILE" ]`, and
+      by the 6 local dry-run tests already run against it) — so
+      **the skip did not come from the caching mechanism's read path
+      this time.** Leading hypothesis, not fully confirmed: `ANG-123`
+      had already been validated many times earlier in this same very
+      long conversation, and the model may be skipping the Jira call
+      based on that accumulated context rather than any instruction
+      this feature added — a shortcut the ORIGINAL (pre-Idea-1)
+      instructions never explicitly forbid either. If true, this
+      feature's cache-check language may have made an existing latent
+      risk worse simply by introducing the general idea that skipping
+      Jira validation is sometimes correct, independent of whether a
+      qualifying note ever actually fired.
+- [x] **Cost, quantified plainly (asked for directly, not glossed
+      over): 1.53 credits for round 2's turn vs. an 0.88-credit
+      reference for a real fresh validation — 0.65 credits MORE, for
+      ZERO Jira tool calls.** This session's own earlier evidence puts
+      a real Jira validation's tool-call cost at roughly 0.5–0.6
+      credits above a no-tool-call baseline — meaning the extra spend
+      here is in the same range as what a real validation would have
+      cost, but bought no validation at all. Worse than "no benefit for
+      the cost": net negative on both cost and correctness
+      simultaneously.
+- [x] **Rolled back completely, verified at every layer, not just
+      reverted-and-assumed-clean:** `aidlc-ask-for-ticket-if-missing.json`
+      restored to the exact pre-Idea-1 text (byte-length verified:
+      29,811 chars, matching the length recorded right after #4's fix);
+      `scripts/ticket-gate-fastpath.sh` and `.gitignore` both confirmed
+      zero-diff against git's tracked baseline; `.kiro/validated-tickets.json`
+      deleted; the original 6 local regression scenarios re-run against
+      the reverted script with `ticket_id` genuinely empty and all
+      matched pre-Idea-1 behavior exactly.
+- [ ] **Open, unresolved, and more important than the cost question
+      this whole investigation started from: does the ORIGINAL
+      (pre-Idea-1) instruction set have this same skip-on-saturated-context
+      risk, independent of anything built here?** Not established
+      either way — round 2's failure happening with the caching
+      mechanism structurally incapable of firing is suggestive but not
+      proof the base instructions are equally vulnerable outside a very
+      long, single-ticket-saturated conversation. Needs testing in a
+      **fresh, short Kiro session** validating a ticket that session has
+      never seen before, to see whether the skip reproduces without
+      hours of accumulated context to lean on. Not yet done — flagging
+      this as the real open risk, not closing it out under the
+      cost-optimization heading it started under.
+
+## 2026-09-01: cost-reduction investigation CLOSED for now — current cost is the real floor for this design, confirmed two independent ways
+This is a conclusion, not another attempt — deliberately its own entry
+rather than buried under the dispatcher-split or validation-cache
+write-ups above, since it settles the question those two attempts kept
+re-opening.
+- [x] **The safe space for further reduction is empty, given tonight's
+      constraint.** Cost work is off-limits anywhere it would touch
+      validation logic (the Jira existence checks, any skip/cache
+      condition) or the file-based state machine (any new marker file,
+      any new state transition) — both categories already produced a
+      real correctness regression tonight (Idea 1's validation cache,
+      twice) or a real cost regression (the dispatcher/detail-file
+      split). Nothing safe is left to try within those boundaries.
+- [x] **The actual cost driver — context size and procedural work per
+      turn, not tool-call type — was confirmed twice, independently,
+      not asserted once and assumed:**
+      1. The dispatcher-split investigation confirmed architecturally
+         (via kiro.dev's own docs) that the full ~30KB instruction
+         block is appended into ONE combined request on every
+         `Prompt Submit` turn, regardless of branch — so a turn's cost
+         floor is set by how much of that context it has to reason
+         through, not by which specific tools it happens to call.
+      2. Tonight's file-vs-MCP cost comparison confirmed the same
+         thing empirically, from real transcript numbers: a turn with
+         zero MCP calls (pure local file I/O plus one command) cost
+         0.43 credits; a turn with two real Jira MCP round-trips cost
+         0.62 — an 0.19-credit gap, upper-bound, not cleanly isolated.
+         Meanwhile the jump from a zero-tool-call turn (0.07–0.10) to
+         ANY turn doing real procedural work (0.43+) happens before
+         tool-call type is even relevant. Splitting one unit of work
+         across two turns (0.62 + 0.43 = 1.05) versus combining it into
+         one (1.03) produced the same total either way — consistent
+         with cost tracking total work done, not turn count or tool
+         mix.
+      3. **Local file writes specifically (marker files included) are
+         confirmed NOT a meaningful cost center** — the numbers above
+         rule this out directly, not by assumption. Stop looking there.
+- [x] **Conclusion, stated plainly: current cost is close to the real
+      floor for this design.** No further reduction is available
+      without either (a) changing what the feature actually does —
+      touching validation logic or the state machine, both already
+      shown risky tonight (one correctness failure, one cost
+      regression) — or (b) accepting the current cost as the real
+      price of running a ticket-tracking procedure this
+      context-heavy, on this trigger, in this architecture. This
+      investigation is closed for tonight on that conclusion — not
+      abandoned mid-thread, not left as a vague "explore more later."
+
+## 2026-09-01: fresh-session grounding bug confirmed reproducible — a reliability ceiling, not a patchable bug; full audit of prior "confirmed live" claims; structural fix proposed
+Found via a clean repro (state confirmed empty of leftover markers
+before each run, not assumed): a genuinely fresh Kiro session's first
+message, mentioning a different real ticket while one is already
+tracked, does not reliably trigger CASE C2's switch question.
+- [ ] **Two clean runs, zero fully-correct outcomes:**
+      1. `BENEFITAPP-26` as the first message, `ANG-123` already
+         tracked: `Read File current-ticket.json` DID happen (visible
+         tool call, ruling out "skipped the read" as the mechanism) —
+         and the response was still the bare CASE A2 empty-state
+         question, ignoring the file's actual (non-empty) content.
+      2. `ANG-4571` as the first message, same setup: response was the
+         correct CASE C2 question — but `pending_switch_to` was never
+         written to `current-ticket.json`, which CASE C2's own
+         procedure requires writing BEFORE asking. A confirming reply
+         on the next turn would have found nothing pending and
+         silently dropped the switch — the exact regression already
+         documented once before (2026-08-31, "the write got skipped...
+         instead re-ran C2 from scratch as if nothing had been asked")
+         and evidently not durably fixed by whatever wording addressed
+         it then.
+      **Verdict, per direct instruction: do not attempt another
+      wording tweak.** This is now the fourth confirmed instance
+      tonight of the agent skipping a specific required step (a Jira
+      validation call, a real clock read for a timestamp, a mandated
+      file read before branching, a mandated file write before asking)
+      while still producing a plausible-looking response around the
+      gap — a reliability ceiling of prose-instruction-driven
+      bookkeeping, not an isolated bug.
+- [x] **Full audit of every prior "confirmed live"/"tested live" claim
+      in this file (29 matches), checking whether each verified actual
+      file state or only transcript/response text — requested directly
+      because two of the runs above only surfaced their defects when
+      the file was checked, not from the transcript alone.**
+      - **Every git-hook-level claim (`pre-commit`/`post-commit`/
+        `commit-msg`, dozens of entries across this file) explicitly
+        checked file state** — byte-identical diffs on
+        `current-ticket.json`, exact trailer values quoted,
+        `pending-ticket-check.json` content verified,
+        `hook-health.log` lines checked. Zero false passes found in
+        this half of the system's history.
+      - **Exactly two chat/agent-hook claims verified transcript
+        content only, never file state** — both about the original
+        Jira-validation feature (2026-08-26): the `ANG-999999` test
+        ("Item 1... confirmed live") and the `ANG-888888` cloudId
+        retest, both judged by what Kiro's response/tool-call sequence
+        said, not by reading `current-ticket.json` afterward. Worth
+        re-verifying, treated as suspect rather than urgent since nothing about that specific mechanism has changed since.
+      - **Every other chat-side claim already honestly marked
+        unverified, not a hidden false positive** — CASE B's
+        profile-click question (two real documented skips, further
+        testing explicitly "handed off... not yet done"), the
+        new-episode baseline refresh-ask ("cannot be tested from this
+        session... not yet done"), the PRIORITY CHECK section ("NOT
+        tested... flagged explicitly rather than assumed passing").
+        Good discipline already in place; these just never got
+        followed up.
+      - **The real finding is the asymmetry, not a backlog of false
+        passes:** the deterministic (git-hook) half of this system has
+        a perfect verification record because its test method (read
+        the file) is reliable; the agent-driven half's test method
+        (trust the transcript) was never reliable to begin with — this
+        is the same asymmetry the two clean repro runs above just
+        demonstrated directly.
+- [ ] **Structural fix proposed, not built — see
+      `docs/deterministic-bookkeeping-proposal.md`.** Recommends moving
+      mechanical bookkeeping (reading `current-ticket.json`'s actual
+      value into context, writing `pending_switch_to`, capturing and
+      writing the credit baseline) into deterministic command-hook code
+      — the same pattern already proven reliable all night — while
+      keeping genuine judgment calls (is this ticket real, does this
+      message really mean a switch) in the agent. This is a design
+      decision, not a hotfix; the proposal doc has the concrete plan
+      and a live test plan, nothing implemented yet.
+
+## 2026-09-01 (same day, follow-up): Option A built (A1 + A2), A2 FAILED its first live test — wrong failure mode targeted, real design lesson
+- [x] **A1 and A2 implemented exactly as proposed, every embedded
+      command individually executed for real against real
+      `state.vscdb`/sandbox files before any live test** (all 5 bundled
+      write/removal commands ran correctly, produced valid JSON, real
+      credit/episode/timestamp values — not just syntax-checked). One
+      real bug caught and fixed during this: the `pending_switch_to`
+      write command's placeholder text contained an unescaped
+      apostrophe (`<pending_switch_to's real value>`) that would have
+      broken the embedded Python string literal — caught by actually
+      substituting and running it, not by eyeballing.
+- [ ] **Live test, attempt 1 of a planned 3+: A1 held, A2 FAILED.** The
+      response text was correct ("You're currently tracked on ANG-123
+      — are you switching to ANG-4571?" — meaning A1's context
+      injection worked, this run did NOT reproduce the original
+      grounding bug). But `current-ticket.json` showed no
+      `pending_switch_to` field afterward, checked directly — A2's
+      bundled write command was never invoked during the real turn,
+      despite passing every local sandbox test.
+- [x] **Root cause of A2's failure, diagnosed precisely, not just
+      re-flagged as "still broken":** A2 was designed to fix "the
+      agent tries to write JSON by hand and gets it wrong" — but the
+      original 2026-08-31 bug this was built to prevent was already
+      described as *"the write got skipped, the trace showed only a
+      Read File call"* — an omission, not a construction error.
+      Bundling a multi-field write into one deterministic command only
+      helps once the agent decides to invoke something; it does
+      nothing about the agent not invoking anything at all. This was a
+      real flaw in the fix's design, not bad luck on one run — the
+      sandbox tests could only ever validate "does the command work
+      when called," never "does the agent call it during a real turn,"
+      so passing them was never actually evidence this specific
+      failure mode was closed.
+- [x] **A related anomaly in the same transcript, connected to the same
+      diagnosis, not filed as unrelated noise:** `getJiraIssue` was
+      called with `"cloudId": "https://teamlease-tech.atlassian.net"`
+      (a URL) instead of the real cloud ID
+      (`95d1d0d9-87db-4e3a-964d-a485e6e75c4c`) that
+      `getAccessibleAtlassianResources` had returned earlier in the
+      SAME turn — it still worked, but used the wrong value. Same
+      shape as A2's failure: the agent not reliably carrying forward
+      and acting on something from its own immediately-preceding
+      step within one turn, independent of instruction clarity. This
+      sharpens tonight's "reliability ceiling" framing: the gap isn't
+      prose instructions getting lost over a long conversation, it's
+      multi-step tool-call chains within a single turn not reliably
+      completing, even when each individual step is unambiguous. No
+      structural fix available for this specific instance — command
+      hooks have no Jira/MCP access at all (confirmed repeatedly
+      tonight), so this value can only ever come from the agent's own
+      tool-call chain. Tracked separately, not blocking the rethink
+      below.
+- [ ] **Rethought approach, proposed not built:** move both the
+      detection AND the write of `pending_switch_to` fully into the
+      command hook, unconditionally, whenever a candidate ticket
+      mention appears — not a fact handed to the agent to act on, but
+      a state change that already happened before the agent reasons
+      about it. Inverts the failure mode: instead of "a real switch
+      silently never gets recorded" (unrecoverable, invisible), it
+      becomes "a non-switch stays recorded until the agent's judgment
+      clears it" (recoverable — and CASE C1 already has a safety net
+      for exactly this: repeating the same ticket ID on a later turn
+      counts as confirmation on its own, so a genuine switch wouldn't
+      be lost even if the agent never explicitly asked). A1 is left in
+      place (different mechanism, nothing for the agent to invoke,
+      the one part that held up this run). Not implemented — needs
+      sign-off given A2 just failed live despite passing every
+      pre-live check available.
+
 ## 2026-09-01 (same day, follow-up): pre-switch commit gate (docs/pre-switch-commit-proposal.md) built, live-tested 5/5 cases, PASSED
 - [x] **Design approved and built as proposed — the automatic version.**
       `scripts/ticket-gate-fastpath.sh` now blocks a mid-conversation
@@ -2340,6 +2879,103 @@ read-only status-checking, not PR-blocking enforcement.
   named the final task of the session regardless of outcome. It
   happened to pass every case; nothing further planned until picked up
   next time.
+
+## 2026-09-01 (same day, follow-up): a THIRD confirmed instance of tonight's skipped-write failure class — this time the CASE A1 marker file, not pending_switch_to
+- [x] **Real transcript, pasted by the user, state-verified, not taken
+      on faith:** `hi` → correctly asked the ticket question (0.07
+      credits). `ANG-123` → correctly asked "Please click your profile
+      icon to refresh your credits, then let me know when ready" (0.09
+      credits) — this is CASE A1's Ask #1. `done` → should have been
+      read as the confirmation reply (per the `pending-baseline-
+      confirm.json`-exemption added 2026-08-31 for exactly this
+      exchange) and triggered the real credit-read + write. Instead the
+      agent read all three state files, found `current-ticket.json`
+      empty and — critically — `pending-baseline-confirm.json` **also
+      absent**, concluded the HARD GATE applied, and re-asked the bare
+      ticket question from scratch (0.24 credits). Confirmed directly
+      afterward: `.kiro/pending-baseline-confirm.json` really is
+      absent, matching the agent's own report, not a transcript
+      artifact.
+- [x] **Root cause, same shape as A2's failure earlier tonight, different
+      spot:** the prompt in `aidlc-ask-for-ticket-if-missing.json`
+      instructs "Write `.kiro/pending-baseline-confirm.json` now (per
+      the MARKER FILE rule) before asking. Then ask once: [profile-click
+      question]" — a free-text instruction to the agent, not a
+      deterministic write. On this turn the agent asked the question
+      correctly but never made the write. This is the **third**
+      confirmed live instance tonight of the same underlying pattern
+      (the original 2026-08-31 `pending_switch_to` skip, tonight's A2
+      `pending_switch_to` skip during live testing, and now this
+      `pending-baseline-confirm.json` skip) — three different required
+      writes, three different call sites, one shared root cause: a
+      prose "write this file" instruction inside a chat turn is not
+      reliably executed, independent of how clearly it's worded.
+- [x] **Real cost of this specific failure, not just a correctness
+      note:** 0.40 credits and 3 user turns spent to land back at
+      "no ticket set," with the user now needing to retype `ANG-123`
+      a second time — worse than a plain miss, since it looks like
+      progress (a real, correct-sounding question each time) right up
+      until the state check reveals nothing was ever saved.
+- [ ] **Not fixed tonight — logging only, per the explicit stop called
+      right before this was pasted.** This is exactly the failure mode
+      the "Rethought approach" above (move detection AND the write
+      fully into the command hook, unconditionally) was proposed to
+      close for `pending_switch_to` — the same fix shape applies here
+      too: `pending-baseline-confirm.json` is a marker only the agent
+      currently writes, with no command-hook equivalent yet. Whether to
+      extend that rethought approach to cover this marker as well, or
+      treat it as a separate case, is an open call for next session, not
+      decided here.
+
+## 2026-09-01 (same session, follow-up): the pre-switch commit gate fired for real in live use — mostly correct, but committed TWICE for the same episode, root cause not yet found
+- [x] **Real, unplanned confirmation the gate works:** picked back up
+      this session by checking state before touching anything, per
+      explicit instruction — found `current-ticket.json` NOT absent
+      (`ticket_id: ANG-4571`, live) and two commits (`9e9a602`,
+      `7916316`) neither made by this session. Both carry the exact
+      message format `"$TICKET_ID: capture episode $EPISODE_ID
+      credits before switching to $PENDING_SWITCH_TO"` from
+      `scripts/ticket-gate-fastpath.sh`'s pre-switch commit gate
+      (`b222d80`) — confirms it fired for real, in the user's actual
+      live Kiro session, not just in this session's own tests, and
+      correctly captured `ANG-123`'s credits (`Kiro-Credits: 1.7500`
+      on the second one) before the switch to `ANG-4571` that
+      `current-ticket.json` now correctly reflects.
+- [ ] **But: it committed twice for the identical episode — the gate's
+      own "skip if already committed" check should have prevented
+      this and didn't.** Both commits carry the exact same
+      `Kiro-Episode: ep_6a96a28819d6ec` AND the exact same
+      `Kiro-Episode-Started: 2026-09-01T10:01:44Z`, 47 seconds apart
+      (`.kiro-tracking/hook-health.log`: `ts=2026-09-01T10:05:31Z`
+      then `ts=2026-09-01T10:06:18Z`, both
+      `post-commit-switch-check-skipped-agent-commit`) — meaning
+      nothing about the episode had changed between them. Checked
+      directly, after the fact: `git log
+      --format='%(trailers:key=Kiro-Episode,valueonly)' | grep -qxF
+      ep_6a96a28819d6ec` DOES find it (both commits' own trailers
+      match) — so on the second firing, the gate's own check should
+      have found the first commit and skipped, and didn't.
+- [x] **Root cause NOT confirmed — two real candidates, not
+      distinguished yet:** (a) the script's `if ! git log ... | grep
+      -qxF "$EPISODE_ID"; then` pattern doesn't distinguish "no match
+      found" from "the `git log` half of the pipe itself failed" (a
+      transient lock, or any other git error) — under `pipefail`,
+      either one makes the `if !` condition true, silently treating a
+      broken check the same as a genuine miss; (b) Kiro may have
+      invoked the fastpath hook twice for turns close enough together
+      that the two runs raced each other. Neither has been isolated
+      by direct evidence yet — flagging both as candidates, not
+      concluding either.
+- **Deliberately set aside, not fixed this session** — scoped out on
+  request to keep this session's build limited to the two originally
+  planned findings (the marker write-skip, and CASE A1's missing
+  ticket_id). `current-ticket.json`'s current `ANG-4571` state is live
+  and was left untouched. Worth a dedicated look next time: a
+  duplicate empty commit is harmless on its own, but the same
+  "check-then-act" pattern with the same race/error-masking risk is
+  about to be reused for two new command-hook writes in this session's
+  planned build, so the design proposal below should account for it
+  rather than silently repeat it.
 
 ## 2026-09-01 (same session, follow-up): CASE A1 marker fix (docs/case-a1-marker-fix-proposal.md) built, live-tested 9/9 cases + 1 follow-up fix, one design claim caught wrong by testing and corrected
 - [x] **Built exactly as proposed, scope confirmed by code trace before
@@ -2433,3 +3069,61 @@ read-only status-checking, not PR-blocking enforcement.
   pass bar as everything else tonight: a single failure (test 9) was
   treated as exactly that, not smoothed over, fixed, and re-verified
   before calling this done.**
+
+## 2026-09-01 (same session, follow-up): double-commit anomaly (from earlier this session) root-caused and fixed — SIGPIPE, not a lock or a race
+- [x] **Investigated properly before proposing anything, per explicit
+      instruction.** Re-read the exact check
+      (`git log ... | grep -qxF "$EPISODE_ID"` under `set -euo
+      pipefail`) and confirmed by direct toy reproduction that a
+      failing left-hand command in a pipe can be silently
+      indistinguishable from "no match found" under `pipefail`.
+- [x] **Root cause confirmed, not a lock file:** tested `.git/
+      index.lock`, `.git/HEAD.lock`, and `.git/refs/heads/<branch>.lock`
+      directly against `git log` — none affect it (a pure read, doesn't
+      touch those locks). The real mechanism: `grep -qxF` exits the
+      instant it finds the target trailer (always near the top of
+      `git log`'s output, since it's the trailer the gate itself just
+      committed), closing the pipe while `git log` is still writing the
+      rest of history — a real SIGPIPE, confirmed directly via
+      `PIPESTATUS`: `git log` exits 141, `grep` exits 0. `pipefail`
+      reports the pipeline failed anyway, which the `if !` check reads
+      as "not found," committing again. **Reproduced 55/55 times**
+      (a 3000-commit repo and the real repo's actual size, 64 commits)
+      — deterministic, not a rare race.
+- [x] **Candidate (a), overlapping hook invocations — tested directly,
+      NOT confirmed.** 10 trials of genuinely concurrent invocations
+      (real background processes, real `git commit` calls) against a
+      version of the check with the SIGPIPE bug already removed:
+      zero double-commits in 10/10. One invocation always either
+      correctly saw the other's commit and skipped, or hit a real git
+      lock error on the commit step (already safely handled by the
+      gate's existing failure path). Not needed to explain the real
+      incident.
+- [x] **Fix built and verified before writing the design doc** (capture
+      `git log`'s output into a variable, check via a here-string —
+      no live pipe into `grep -q` at all): 10/10 true positives, 1/1
+      true negative in isolation, before the design doc was even
+      written.
+- [x] **Design approved** (`docs/pre-switch-gate-sigpipe-proposal.md`),
+      built in the real script, then live-tested 5/5 in an isolated
+      scratch repo wired with the REAL `.githooks/*` (`core.hooksPath`
+      set, `commit-msg` actually running) so real trailers were
+      genuinely present, not simulated — the real repo's live
+      `ANG-4571` state was never touched, checked directly before and
+      after:
+      1. **Direct replay of the exact incident** (same episode ID,
+         same two-turn pattern): turn 1 commits, turn 2 — the exact
+         scenario that previously produced `9e9a602`/`7916316` — now
+         correctly skips. `git log` trailer count stayed at 1, not 2.
+      2. **10 fresh episodes, same pattern:** 0/10 failures.
+      3. **True-negative check:** a genuinely new, never-committed
+         episode still triggers the commit correctly.
+      4. **The other two `grep -q` sites** (exact-match and fuzzy-match
+         detection, both pipe from `echo` of a short variable, not a
+         streaming process) confirmed still working, unaffected.
+      5. **Both ruled-out candidates re-confirmed against the actual
+         fixed script**, not just the standalone harness: lock-file
+         tests still show no effect; 10-trial concurrency re-test
+         shows 0/10 double-commits.
+- **All 5 live-test cases passed. Real repo state (`ANG-4571`, git log)
+  confirmed unchanged throughout — verified directly, not assumed.**

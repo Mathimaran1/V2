@@ -3,7 +3,17 @@
     "atlassian-rovo": {
       "url": "https://mcp.atlassian.com/v1/mcp/authv2",
       "disabled": false,
-      "autoApprove": []
+      "autoApprove": [],
+      "disabledTools": [
+        "createJiraIssue",
+        "editJiraIssue",
+        "transitionJiraIssue",
+        "addCommentToJiraIssue",
+        "createConfluencePage",
+        "updateConfluencePage",
+        "createConfluenceFooterComment",
+        "createConfluenceInlineComment"
+      ]
     },
     "aws": {
       "command": "uvx",

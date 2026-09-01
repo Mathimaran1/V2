@@ -115,8 +115,42 @@ except Exception:
     print('')
 ")
   if [ -n "$PENDING_SWITCH_TO" ] && [ -n "$EPISODE_ID" ]; then
-    if ! git log --format='%(trailers:key=Kiro-Episode,valueonly)' \
-        | grep -qxF "$EPISODE_ID"; then
+    # --- Uncommitted-work gate (added 2026-09-01, ANG-4571). A ticket
+    # switch overwrites current-ticket.json with a fresh episode —
+    # any uncommitted user work that was done under the OLD ticket
+    # would end up committed under the NEW ticket's episode if the
+    # user forgets to commit first. Check git status --porcelain:
+    # if anything is dirty (staged or unstaged), block with exit 2
+    # and tell the user to commit or stash before switching.
+    # This fires on EVERY turn where pending_switch_to is set, not
+    # just the confirming turn — same "gate on pending, not on
+    # judgment" rationale as the pre-switch commit gate below.
+    DIRTY_FILES=$(git status --porcelain 2>/dev/null)
+    if [ -n "$DIRTY_FILES" ]; then
+      echo "You have uncommitted changes — please commit or stash your work on $TICKET_ID before switching to $PENDING_SWITCH_TO. This ensures your current work gets tracked under the right ticket." >&2
+      echo "" >&2
+      echo "Dirty files:" >&2
+      echo "$DIRTY_FILES" >&2
+      exit 2
+    fi
+
+    # docs/pre-switch-gate-sigpipe-proposal.md, added 2026-09-01: capture
+    # git log's output FIRST, then check it via a here-string — NOT a
+    # live pipe into `grep -q`. Confirmed live, reproduced 55/55 times:
+    # a live `git log | grep -qxF` here caused the real double-commit
+    # bug (9e9a602/7916316) — grep -q exits the instant it finds the
+    # target trailer (always near the top, since it's the trailer this
+    # gate itself just committed), closing the pipe while git log is
+    # still writing the rest of history, triggering a real SIGPIPE in
+    # git log (confirmed via PIPESTATUS: git log exits 141, grep exits
+    # 0). Under `pipefail` (set at the top of this file), that reports
+    # the whole pipeline as failed even though grep succeeded, so the
+    # `if !` below wrongly read "found" as "not found" every time and
+    # committed again. A here-string has no second process on the other
+    # end to receive a SIGPIPE — git log fully completes via command
+    # substitution before grep ever runs.
+    LOG_TRAILERS=$(git log --format='%(trailers:key=Kiro-Episode,valueonly)')
+    if ! grep -qxF "$EPISODE_ID" <<< "$LOG_TRAILERS"; then
       # KIRO_AGENT_COMMIT=1 — same flag the agent's own chat-confirmed
       # commits already use — is required here, not optional: it
       # deterministically skips pre-commit's refresh-click ask and
@@ -149,6 +183,43 @@ fi
 # This closes that gap by not requiring the agent to go fetch the fact
 # at all; it's just already sitting in context before reasoning starts.
 if [ -n "$TICKET_ID" ]; then
+  # --- Early dirty-files gate for C2 detection turn (added 2026-09-01,
+  # ANG-4571, second pass — closes the gap the first pass missed).
+  # The existing dirty-files check above only fires when pending_switch_to
+  # is already set (the C1 confirmation turn). But on the C2 detection
+  # turn — the user's message mentions a different ticket for the first
+  # time — pending_switch_to hasn't been written yet, so that check
+  # never fires. The agent hook's behavioral instruction to run
+  # `git status --porcelain` at C2 was confirmed skipped in live
+  # testing. This code-enforced check catches it deterministically:
+  # extract ticket IDs from the prompt, check if any differ from
+  # TICKET_ID, and if so + dirty files exist, block with exit 2.
+  # Deliberately conservative: only blocks, doesn't judge whether the
+  # mention is "a real switch intent" — that's still the agent's job.
+  # Worst case: a passing reference to another ticket in a dirty tree
+  # gets blocked unnecessarily; the user just re-sends after committing
+  # or rephrasing.
+  PROMPT_TICKETS=$(echo "$PROMPT" | grep -oE '\b[A-Z][A-Z0-9]*-[0-9]+\b' || true)
+  if [ -n "$PROMPT_TICKETS" ]; then
+    HAS_DIFFERENT_TICKET=""
+    for T in $PROMPT_TICKETS; do
+      if [ "$T" != "$TICKET_ID" ]; then
+        HAS_DIFFERENT_TICKET="$T"
+        break
+      fi
+    done
+    if [ -n "$HAS_DIFFERENT_TICKET" ]; then
+      DIRTY_FILES=$(git status --porcelain 2>/dev/null)
+      if [ -n "$DIRTY_FILES" ]; then
+        echo "You have uncommitted changes — please commit or stash your work on $TICKET_ID before switching to $HAS_DIFFERENT_TICKET. This ensures your current work gets tracked under the right ticket." >&2
+        echo "" >&2
+        echo "Dirty files:" >&2
+        echo "$DIRTY_FILES" >&2
+        exit 2
+      fi
+    fi
+  fi
+
   echo "CURRENT_TRACKED_TICKET: $TICKET_ID (read directly from current-ticket.json by this command hook, not by you — trust this value over any assumption about session freshness)"
   exit 0
 fi
