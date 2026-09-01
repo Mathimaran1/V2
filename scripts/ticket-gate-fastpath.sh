@@ -77,6 +77,66 @@ except Exception:
 ")
 fi
 
+# --- Pre-switch commit gate (docs/pre-switch-commit-proposal.md, added
+# 2026-09-01). Answers, by construction, the open capability question
+# that used to have its own isolated test block right here (removed now
+# that this block is a stronger, live proof of the same thing): a
+# command hook CAN write files that persist (confirmed by the removed
+# test) and CAN run `git commit` for real (this block), since both are
+# just subprocess calls this script already makes.
+#
+# Closes a confirmed gap: a mid-conversation ticket switch (CASE C1 in
+# aidlc-ask-for-ticket-if-missing.json) overwrites episode_id with a
+# fresh one for the new ticket, and if the OLD episode never made it
+# into a commit's Kiro-Episode trailer, its credit usage is gone with
+# no record anywhere. Gate on pending_switch_to being set (written by
+# CASE C2 on a prior turn) rather than on judging whether THIS message
+# confirms the switch — that judgment call is deliberately left to the
+# agent hook everywhere else in this script (see FUZZY_TICKET_MATCH
+# below); worst case here is one harmless extra empty commit if the
+# switch ends up declined.
+if [ -n "$TICKET_ID" ]; then
+  PENDING_SWITCH_TO=$(python3 -c "
+import json
+try:
+    with open('.kiro/current-ticket.json') as f:
+        data = json.load(f)
+    print(data.get('pending_switch_to', '') or '')
+except Exception:
+    print('')
+")
+  EPISODE_ID=$(python3 -c "
+import json
+try:
+    with open('.kiro/current-ticket.json') as f:
+        data = json.load(f)
+    print(data.get('episode_id', '') or '')
+except Exception:
+    print('')
+")
+  if [ -n "$PENDING_SWITCH_TO" ] && [ -n "$EPISODE_ID" ]; then
+    if ! git log --format='%(trailers:key=Kiro-Episode,valueonly)' \
+        | grep -qxF "$EPISODE_ID"; then
+      # KIRO_AGENT_COMMIT=1 — same flag the agent's own chat-confirmed
+      # commits already use — is required here, not optional: it
+      # deterministically skips pre-commit's refresh-click ask and
+      # post-commit's switch-question ask, both of which are
+      # TTY-dependent and would otherwise either hang up to 5 minutes
+      # (see aidlc-git-conventions.md's two documented TTY-detection
+      # bugs — a subprocess having a TTY attached is not proof a human
+      # is watching it) or dump an unanswerable question into nothing.
+      # --allow-empty: nothing needs to be staged, only pre-commit's
+      # own trailer-stamping matters here.
+      if ! KIRO_AGENT_COMMIT=1 git commit --allow-empty \
+          -m "$TICKET_ID: capture episode $EPISODE_ID credits before switching to $PENDING_SWITCH_TO" \
+          >/tmp/pre-switch-commit.log 2>&1; then
+        echo "A switch to $PENDING_SWITCH_TO is pending, but the automatic bookkeeping commit for the current episode ($EPISODE_ID) failed — see /tmp/pre-switch-commit.log. Do not confirm the switch yet; resolve this first (a real commit, or ask the user how to proceed)." >&2
+        exit 2
+      fi
+    fi
+  fi
+fi
+
 # Ticket already set, a pending Jira validation is in flight, or the
 # agent hook is mid-way through a "refresh credits, then confirm" wait —
 # all three need the real agent hook. Let the prompt through untouched.

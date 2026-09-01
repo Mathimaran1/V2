@@ -2256,3 +2256,87 @@ read-only status-checking, not PR-blocking enforcement.
       ANG-4571, commit, and confirm the same question resolves for
       that project through this same connection. None of that has
       happened — reporting it as not done, not as done-with-caveats.
+
+## 2026-09-01 (same day, follow-up): pre-switch commit gate (docs/pre-switch-commit-proposal.md) built, live-tested 5/5 cases, PASSED
+- [x] **Design approved and built as proposed — the automatic version.**
+      `scripts/ticket-gate-fastpath.sh` now blocks a mid-conversation
+      ticket switch (gated on `pending_switch_to` being set — not on
+      judging whether the current message confirms it, deliberately
+      staying out of that NLU call the same way `FUZZY_TICKET_MATCH`
+      already does) until the current `episode_id` has at least one
+      commit with a matching `Kiro-Episode` trailer, auto-committing
+      one itself (`KIRO_AGENT_COMMIT=1 git commit --allow-empty`) if
+      not. Real gap confirmed before building: `current-ticket.json`'s
+      live episode `ep_6a9681eb9207df` had zero matching commits in
+      the last 10 — this was not a hypothetical.
+- [x] **Cleanup alongside the build:** the isolated capability-test
+      block (`.kiro/hook-write-test.json`, added earlier tonight to
+      answer "can a command hook write a persistent file") removed
+      from the script per its own "remove once answered" comment — this
+      feature is a strictly stronger live proof of the same capability
+      (running `git commit` is one more subprocess call, not a new
+      category). The leftover test file itself deleted.
+- [x] **Case 1 — auto-commit fires:** started from the real
+      no-commit-yet episode above, wrote `pending_switch_to` to
+      simulate CASE C2, ran the script. Real commit `80decaa` landed,
+      `Kiro-Episode: ep_6a9681eb9207df` / `Kiro-Ticket: ANG-123`
+      confirmed via `git log` trailers (not transcript text), message
+      `"ANG-123: capture episode ep_6a9681eb9207df credits before
+      switching to ANG-999"`, no unrelated files staged, gitleaks log
+      showed `0 commits scanned` / `no leaks found`.
+- [x] **Case 2 — confirm the switch:** ran the real CASE C1
+      credit-read+episode command, wrote the new baseline for
+      `ANG-999`. Confirmed via `git show` that commit `80decaa`
+      (the old episode) is untouched and HEAD didn't move from the
+      switch write itself — the old episode's credits are now
+      permanently on record, which is the entire point of this fix.
+- [x] **Case 3 — decline the switch:** set `pending_switch_to` again
+      on the new episode, let the auto-commit fire (`bd57d01`), then
+      simulated a decline (field removed, `ticket_id`/`episode_id`
+      left alone). A follow-up turn produced no duplicate commit —
+      `HEAD` diffed identical before/after, confirmed directly.
+- [x] **Case 4 — the TTY-subprocess unknown flagged in the proposal as
+      NOT YET LIVE-VERIFIED, now closed both ways:** this sandboxed
+      shell has no controlling TTY at all (`tty` → "not a tty",
+      `/dev/tty` unopenable — confirmed directly), so Cases 1 and 3
+      above already exercised the no-TTY path for real, and
+      `.kiro-tracking/hook-health.log` showed
+      `pre-commit-refresh-confirmed-via-chat` /
+      `post-commit-switch-check-skipped-agent-commit` — the
+      `KIRO_AGENT_COMMIT=1` path, not a TTY-branch skip line. Then
+      re-ran the same trigger under a real pseudo-terminal (Python's
+      `pty.spawn`, a genuine TTY attached to the subprocess — the
+      worse-case scenario the proposal actually worried about) and got
+      the identical agent-commit branch again (commit `d838659`),
+      because `pre-commit`/`post-commit` both check `$KIRO_AGENT_COMMIT`
+      *before* any TTY check — structurally unreachable to fall into
+      the 5-minute-hang branch when it's set, confirmed by reading the
+      real shipped hook code, not just observed as a coincidence.
+- [x] **Case 5 — the user's added requirement: does gitleaks (or
+      anything else in `pre-commit`) ever genuinely fail on this empty
+      commit, and does the new code actually block on it.** Direct
+      `gitleaks protect --staged` test with nothing staged: `0 commits
+      scanned`, `no leaks found`, exit 0 — cannot fail on an empty
+      stage, real evidence not an assumption. Separately, the new
+      script's own `if ! git commit ...; then exit 2; fi` guard tested
+      in an isolated scratch repo (`core.hooksPath` pointed at a
+      deliberately-failing fake `pre-commit`) — confirmed it correctly
+      surfaces a blocking message and exits 2, with no bogus commit
+      landing, rather than silently proceeding or crashing the hook.
+- [x] **All 5 cases passed on first attempt** — no rollback needed.
+      Real commits from this test run left in `git log` on
+      `test-case-a` deliberately (consistent with this branch's
+      existing role as the test branch — `80decaa`, `bd57d01`,
+      `d838659` — the first of the three is a genuine, correct capture
+      of real episode `ep_6a9681eb9207df`'s credits, not throwaway
+      test noise).
+- [x] **State reset to clean before stopping for the night:**
+      `.kiro/current-ticket.json` deleted (it's gitignored, local-only
+      state — the test run had left it pointing at fictional test
+      tickets `ANG-999`/`ANG-124`). Next session starts with no ticket
+      tracked, which correctly triggers the real empty-ticket gate
+      rather than silently continuing to "track" a fake ticket.
+- **Stopping here for the night per explicit instruction** — this was
+  named the final task of the session regardless of outcome. It
+  happened to pass every case; nothing further planned until picked up
+  next time.
