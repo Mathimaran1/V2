@@ -3274,3 +3274,111 @@ tracked, does not reliably trigger CASE C2's switch question.
       Fixed the harness, not the (correctly-behaving) code.
 - **All 7 cases passed on this attempt — no further fixes needed. Real
   repo state (`ANG-123`, git log) confirmed unchanged throughout.**
+
+## 2026-09-02: a THIRD marker-related failure variant, found during a manual test walkthrough — the ask-and-wait step itself skipped, not just the marker
+- [x] **Real symptom:** after `ANG-123` was validated against Jira, the
+      flow went straight to the credit-read command and wrote the
+      baseline — no "please click your profile icon" question ever
+      appeared. `current-ticket.json` confirms a real, fully-formed
+      baseline landed (`episode_started_at: 2026-09-02T05:34:21Z`,
+      correct `dirty_snapshot_at_episode_start`) — the write itself
+      worked, and used the right ticket_id. What's missing is
+      everything between Jira validation passing and that write.
+- [x] **`hook-health.log` gives NO signal either way — a structural
+      gap, not a one-off.** Checked every single write to that file
+      across the whole codebase: every one is tied to a real git
+      operation (`pre-commit`/`post-commit`/`post-checkout`/`pre-push`/
+      the uncommitted-work-gate blocks). Establishing a baseline is a
+      pure file write with no git operation at all — nothing anywhere
+      logs it. This mechanism is entirely invisible to that log, for
+      either a correct run or a skipped one.
+- [x] **CASE A1's instruction text traced directly — intact and
+      correctly sequenced, NOT a textual regression from tonight's
+      other fixes.** The ask ("Then ask the user directly... and WAIT
+      for their actual reply — before running the command below") is
+      still there, still before the credit-read command. Neither the
+      uncommitted-work-gate changes nor the marker fix touched this
+      sentence — confirmed by diff.
+- [x] **A real, mechanically-confirmed connection to a second bug in
+      the same walkthrough, not just a coincidence:**
+      `.kiro/pending-baseline-confirm.json` was found still sitting
+      there with `ticket_id: "ZZZZ-99999"` — a stale marker from an
+      earlier fake-ticket test, never cleaned up (the rejection-branch
+      delete from the CASE A1 marker fix skipped, same failure shape
+      as everything else tonight). Traced the fastpath script directly:
+      the marker-exists check (line 268, `if -f pending-ticket-check.json
+      || -f pending-baseline-confirm.json; then exit 0; fi`) runs
+      BEFORE the exact-match/fuzzy-match detection blocks that write or
+      update the marker (lines 285/316). **This means the stale
+      `ZZZZ-99999` marker's mere presence blocked the command hook from
+      ever reaching its own deterministic candidate-detection logic for
+      `ANG-123` at all** — confirmed by code trace, not speculation.
+      Whether this fully explains the agent also skipping its own ask
+      instruction is NOT confirmed — the agent hook's top-level CASE A
+      logic reads `current-ticket.json` independently and shouldn't
+      need the fast-path's help to recognize CASE A1 applies — but it's
+      a real, mechanically-verified contributing factor, not a
+      coincidence being waved at.
+- [x] **Honest process failure, named plainly as asked:** the CASE A1
+      marker fix's own proposal doc
+      (`docs/case-a1-marker-fix-proposal.md`) has a "What this does NOT
+      fully close" section — it names the decline-with-alternative
+      case and the skipped-rejection-deletion case, but never named
+      "the agent could skip the ask-and-wait step itself, independent
+      of the marker mechanics" as a residual risk. It should have. The
+      fix's own 9 test cases only ever verified the deterministic layer
+      (the command hook's marker write, the fast-path's stand-down
+      behavior) — "Test 2, full flow to completion" was this session
+      manually simulating a compliant agent, never a live test of
+      whether the real agent actually stops and asks. That was never in
+      scope, and the proposal should have said so instead of leaving it
+      implicit.
+- [ ] **Not fixed yet — two things proposed for review, one built.**
+      See the design entry immediately below.
+
+## 2026-09-02 (same day, follow-up): proposal for the wording fix + confidence-flag feasibility; stale-marker auto-update BUILT and tested (not just proposed)
+- [x] **Fixed now, not just proposed, per explicit instruction — the
+      stale-marker bug specifically, distinct from the harder
+      ask-skipping problem above.** `scripts/ticket-gate-fastpath.sh`'s
+      marker-exists check now runs the SAME exact/fuzzy candidate
+      detection already used elsewhere in the script before standing
+      down: if the current message is a fresh, different candidate than
+      the marker's own stored `ticket_id`, the marker gets updated
+      deterministically, right there, regardless of why the old
+      candidate went stale (explicit rejection, silent abandonment, or
+      anything else) — the command hook doesn't need to know why, only
+      that a new real candidate has arrived. This directly closes the
+      mechanical block found above: `ANG-123` would now correctly
+      overwrite the stale `ZZZZ-99999` marker the moment it's typed,
+      instead of being silently swallowed by the marker-exists
+      early-exit.
+- [x] **Live-tested 6/6 in an isolated scratch repo, real file state
+      checked after each:** (A) exact replay of the real incident
+      (stale `ZZZZ-99999` marker + typing `ANG-123`) — marker correctly
+      updated to `ANG-123`. (B) a genuine reply ("done") to a pending
+      marker — left untouched, still correctly stands down. (C) the
+      same candidate repeated — correct no-op, no unnecessary write.
+      (D) fuzzy re-entry while a different stale marker exists —
+      correctly updated to the new normalized candidate (this also
+      strengthens Test-9's original fix from the CASE A1 marker
+      proposal, which relied on agent prose for this exact scenario;
+      it's now deterministic for any candidate matching the ticket-ID
+      shape, prose only still needed for the harder decline-with-
+      alternative phrasing like "no, I meant..."). (E)/(F) regression
+      checks — a fresh exact match with no marker yet, and
+      `pending-ticket-check.json`'s unconditional stand-down — both
+      unaffected. Real repo state (still showing the live
+      `ZZZZ-99999` marker, left deliberately untouched — it will
+      self-correct the next time a real candidate is typed) confirmed
+      unchanged throughout.
+- [x] **Proposed, not built — a wording fix for the "already handled"
+      framing risk**, and **a feasibility investigation for a
+      deterministic after-the-fact confidence flag** — see
+      `docs/case-a1-ask-skip-mitigation-proposal.md`. Plainly stated in
+      that doc, per explicit instruction: the wording fix is the one
+      that might actually reduce the failure; the confidence flag only
+      makes an already-occurred failure more visible after the fact —
+      it cannot prevent or reliably detect the general case (a command
+      hook has no visibility into whether the agent's actual chat
+      response included the ask, or whether it genuinely waited for a
+      reply before proceeding).

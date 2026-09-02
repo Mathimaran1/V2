@@ -261,11 +261,58 @@ print('\n'.join(l for l in current if l not in baseline))
   exit 0
 fi
 
-# A pending Jira validation is in flight, or the agent hook is
-# mid-way through a "refresh credits, then confirm" wait — both need
-# the real agent hook. Let the prompt through untouched, no note
-# needed (ticket_id is empty in this branch, nothing to report).
-if [ -f .kiro/pending-ticket-check.json ] || [ -f .kiro/pending-baseline-confirm.json ]; then
+# A pending Jira validation is in flight — needs the real agent hook.
+# Let the prompt through untouched, no note needed (ticket_id is empty
+# in this branch, nothing to report).
+if [ -f .kiro/pending-ticket-check.json ]; then
+  exit 0
+fi
+
+# The agent hook may be mid-way through a "refresh credits, then
+# confirm" wait for a PREVIOUS candidate. Before standing down, though
+# — check whether the marker has gone stale. Added 2026-09-02,
+# confirmed live: a rejected/abandoned candidate's marker sat here
+# un-deleted (the agent's "delete on rejection" prose step skipped —
+# same reliability gap as everything else tonight), and its mere
+# presence blocked this script from EVER reaching the
+# candidate-detection logic below for a real, later-typed ticket —
+# confirmed by this exact code trace, not speculation (see TODO.md,
+# 2026-09-02). Rather than depending on the agent to notice and clean
+# up a stale marker, check deterministically: does the CURRENT message
+# look like a fresh, different candidate than what the marker already
+# holds? If so, update it now — this script doesn't need to know WHY
+# the old one went stale (explicit rejection, silent abandonment, or
+# anything else), only that a real new candidate has arrived. Reuses
+# the same match logic as the candidate-detection below (duplicated
+# rather than shared, matching this file's existing style — the
+# exact-match regex already appears in several places).
+if [ -f .kiro/pending-baseline-confirm.json ]; then
+  STALE_CANDIDATE=""
+  if echo "$PROMPT" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
+    STALE_CANDIDATE="$PROMPT"
+  else
+    STALE_NORM=$(echo "$PROMPT" \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]*-[[:space:]]*/-/' \
+      | tr '[:lower:]' '[:upper:]')
+    if echo "$STALE_NORM" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
+      STALE_CANDIDATE="$STALE_NORM"
+    fi
+  fi
+  if [ -n "$STALE_CANDIDATE" ]; then
+    # Safe to embed unquoted — STALE_CANDIDATE only ever holds a value
+    # that already matched the strict ticket-ID regex above.
+    python3 -c "
+import json
+try:
+    with open('.kiro/pending-baseline-confirm.json') as f:
+        d = json.load(f)
+except Exception:
+    d = {'awaiting': True}
+if d.get('ticket_id') != '$STALE_CANDIDATE':
+    d['ticket_id'] = '$STALE_CANDIDATE'
+    json.dump(d, open('.kiro/pending-baseline-confirm.json', 'w'))
+"
+  fi
   exit 0
 fi
 
