@@ -3690,3 +3690,139 @@ tracked, does not reliably trigger CASE C2's switch question.
 - **All 8 test-plan cases pass (after the one real fix found and
   applied mid-testing). Real repo state (`ANG-123`, git log) confirmed
   unchanged throughout — all testing done in isolated scratch repos.**
+
+## 2026-09-02 (same day, follow-up): three distinct real findings from one transcript — uncommitted-work gate confirmed working, a new missing-flag/garbled-input symptom, and Kiro-Confirmed's named CASE C1 gap manifesting for real
+- [x] **Good news, confirmed with real evidence:** the uncommitted-work
+      gate fired correctly, live, for the first time —
+      `hook_status=uncommitted-work-gate-blocked ts=2026-09-02T06:59:31Z
+      site=fastpath-c2`, matching the transcript's block message
+      exactly (the dirty files listed are tonight's own real pending
+      work).
+- [ ] **New, separate, serious finding: the agent's own `git commit`
+      call omitted `KIRO_AGENT_COMMIT=1`, despite its visible response
+      explicitly claiming to follow the mandatory confirm-first
+      process** (`"Confirming: the user replied '...' before I
+      proceed"` — the tripwire line existed, the flag on the actual
+      command did not). Confirmed directly: `hook-health.log` has no
+      `pre-commit-refresh-confirmed-via-chat` line for this commit
+      (`ad9d497`, `07:03:20Z`) — it fell through to `pre-commit`'s real
+      TTY interactive path instead (which logs nothing when answered
+      within its timeout), which is why real terminal prompts appeared
+      in the transcript at all. Something then answered those prompts
+      with a **garbled value** — `New ticket ID (or 'none'): ANG-12
+      4571` instead of a clean `ANG-4571`.
+- [x] **Investigated as far as this session can go — a real limit,
+      stated honestly, not guessed past.** `aidlc-git-conventions.md`'s
+      "MANDATORY FIRST STEP, NO EXCEPTIONS" wording for exactly this
+      rule is already about as strong as anything in this project and
+      still failed — the same reliability ceiling as every other
+      skipped-step finding tonight, now in a new shape (an omitted env
+      var rather than a skipped step). The garbled ticket-ID value has
+      no available explanation from this session — no visibility into
+      Kiro's actual terminal-execution plumbing exists here. Logged
+      as unexplained, not diagnosed, rather than inventing a mechanism.
+- [x] **Direct confirmation, with real evidence, of the exact coverage
+      gap `docs/kiro-confirmed-persistent-signal-proposal.md` already
+      named as open:** the transcript's switch confirmation ("yes")
+      went straight from reading `current-ticket.json` to running the
+      credit-read command — the same shape as all three CASE A1
+      occurrences, but this is CASE C1. Checked directly:
+      `current-ticket.json` for this exact episode
+      (`ep_6a97cace208839`, `ANG-4571`) has **no** `ask_confirmed` or
+      `ask_confirmed_gap_seconds` fields at all — a commit against it
+      right now would read `Kiro-Confirmed: n/a`, not `false`. The
+      named-but-theoretical gap manifested for real, on the very next
+      real use after shipping.
+- **Approved to act on: extend `Kiro-Confirmed` to cover CASE C1 (build
+  below). The missing-flag/garbled-input finding is logged as a real,
+  separate, open item — investigation hit this session's real limit,
+  not resolved.**
+- [x] **Built: `Kiro-Confirmed` extended to CASE C1**, reusing the
+      already-existing, already-proven C2 detection point in `scripts/
+      ticket-gate-fastpath.sh` (the same `HAS_DIFFERENT_TICKET` check
+      that already drives the uncommitted-work dirty-gate) rather than
+      adding a new one — one `candidate-detection-log.jsonl` write,
+      unconditional, before the dirty-check that might otherwise block
+      the turn. No agent hook prompt changes needed — CASE C1 already
+      reads a reliable `pending_switch_to` field for the ticket ID
+      itself; the detection log stays entirely agent-invisible, same
+      as the CASE A1 version.
+- [x] **Live-tested in an isolated scratch repo, real file state
+      checked after each:**
+      1. **Direct replay of the real transcript's shape** — C2 detects
+         `ANG-4571` while `ANG-123` is tracked, logged; ask skipped
+         (12s to write, matching the real gap order of magnitude) →
+         `Kiro-Confirmed: false`, correctly computed — this exact
+         scenario was `n/a` (invisible) before this extension, now
+         caught.
+      2. Genuine 60s C1 wait → `Kiro-Confirmed: true`.
+      3. CASE A1 confirmed unaffected — a fresh exact-match candidate
+         still logs and computes normally (30s gap → `true`).
+      4. The log-write confirmed unconditional — fires even on a turn
+         where the dirty-files gate itself blocks and re-asks, not
+         only on a clean turn (caught during setup, not a separate
+         planned case, but real evidence of the intended behavior).
+- **Real repo state (`ANG-4571`, `ep_6a97cace208839`, git log)
+  confirmed unchanged throughout — all testing done in an isolated
+  scratch repo. Not committed yet.**
+
+## 2026-09-02 (same day, follow-up): PRIORITY CHECK root cause fixed — a design gap, not another prose-reliability instance
+- [x] **Live state corrected first, per explicit instruction:**
+      `current-ticket.json` had `ticket_id: "ANG-4571"` when the user
+      had actually typed `ANG-123` — re-ran the real deterministic
+      credit-read command with the correct ticket_id before
+      investigating further, so tracking stopped being misattributed
+      immediately.
+- [x] **Root cause traced to exact instruction text, not inferred —
+      this is a design gap, not a compliance failure.** PRIORITY CHECK
+      states plainly: *"runs BEFORE everything else... on every single
+      user message, regardless of what the message is about"* and
+      *"validating a flagged ticket takes priority over answering the
+      request."* It has no case for "the current message is itself a
+      different, valid ticket-ID answer" — that scenario gets the same
+      treatment as genuinely unrelated chat. Confirmed by the tool
+      calls themselves: `getJiraIssue` was called once, for the STALE
+      `ANG-4571`; no validation call for `ANG-123` exists anywhere —
+      it was never considered, not skipped by mistake.
+- [x] **A contributing factor also found and fixed:** `.githooks/
+      post-checkout` only ever cleared `current-ticket.json` on a
+      branch switch, never `pending-ticket-check.json` or `pending-
+      baseline-confirm.json` — letting a stale `typed_ticket` outlive
+      the branch context it was created in and collide with a
+      genuinely new one later.
+- [x] **Built, three coordinated pieces, each verified individually:**
+      1. `.githooks/post-checkout` — now also clears both pending
+         marker files on a real branch switch.
+      2. `scripts/ticket-gate-fastpath.sh` — deterministic fix, same
+         proven pattern as the earlier stale-`pending-baseline-
+         confirm.json` fix: before standing down for a pending
+         `typed_ticket`, check whether the CURRENT message is itself a
+         different, ticket-shaped candidate; if so, discard the stale
+         file and fall through to normal candidate detection instead
+         of validating the old value.
+      3. `aidlc-ask-for-ticket-if-missing.json` — the same carve-out
+         added to PRIORITY CHECK's own agent-side instruction, covering
+         the case the command hook can't reach at all (`ticket_id`
+         non-empty, where the fast-path exits via `CURRENT_TRACKED_
+         TICKET` before ever examining `pending-ticket-check.json`).
+- [x] **Live-tested, real file state after every case:**
+      1. **Exact replay of the real incident** — stale `typed_ticket:
+         "ANG-4571"`, current message `"ANG-123"`: stale file
+         discarded, `pending-baseline-confirm.json` correctly shows
+         `ANG-123`, and — as a direct side effect of falling through
+         to normal detection — `candidate-detection-log.jsonl` now
+         also has a real entry, closing part of the `Kiro-Confirmed`
+         coverage gap for this path too, not just the wrong-ticket bug.
+      2. Message matches the pending value → stands down unchanged,
+         `pending-ticket-check.json` untouched.
+      3. Message isn't ticket-shaped at all (unrelated chat) → stands
+         down unchanged, same as before this fix.
+      4. **Full end-to-end replay through to a completed baseline:**
+         `current-ticket.json` correctly shows `ticket_id: "ANG-123"`
+         (not `ANG-4571`) with real `ask_confirmed`/`ask_confirmed_
+         gap_seconds` data populated — the wrong-ticket bug and the
+         `Kiro-Confirmed` blind spot for this exact scenario both
+         closed by the same fix.
+- **Real repo state (`ANG-123`, corrected baseline, git log) confirmed
+  unchanged by testing — all testing done in isolated scratch repos.
+  Not committed yet.**

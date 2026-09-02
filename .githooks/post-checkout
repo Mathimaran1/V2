@@ -20,5 +20,18 @@ fi
 
 if [ "$3" = "1" ]; then
   echo "{}" > .kiro/current-ticket.json
+  # Added 2026-09-02, root-cause fix: this only ever cleared
+  # current-ticket.json, leaving .kiro/pending-ticket-check.json (a
+  # typed_ticket deferred from post-commit's own terminal switch flow)
+  # to survive a real branch switch untouched. Confirmed live: a stale
+  # typed_ticket from an EARLIER branch's context outlived the switch,
+  # then collided with a genuinely different, freshly-typed ticket ID
+  # on the new branch — PRIORITY CHECK's own "runs on every message,
+  # regardless of what it's about" instruction validated the stale
+  # value and silently discarded the real one. Any pending sub-dialogue
+  # state is tied to the branch context it was created in and has no
+  # business surviving a switch to a different one — clear it here too,
+  # same reasoning as current-ticket.json itself.
+  rm -f .kiro/pending-ticket-check.json .kiro/pending-baseline-confirm.json
   echo "New branch — Kiro will ask for the ticket next time."
 fi

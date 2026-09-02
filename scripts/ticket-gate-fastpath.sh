@@ -304,6 +304,25 @@ if data is not None and 'ask_confirmed_gap_seconds' not in data:
       fi
     done
     if [ -n "$HAS_DIFFERENT_TICKET" ]; then
+      # docs/kiro-confirmed-persistent-signal-proposal.md, extended
+      # 2026-09-02 to cover CASE C1 — named as an open coverage gap in
+      # that proposal, confirmed live the same day: a real mid-session
+      # switch's baseline showed no ask_confirmed data at all. This is
+      # the C2 half of the detection, reusing the same deterministic
+      # point that already triggers the dirty-files gate below rather
+      # than adding a new one. Logged unconditionally, same as CASE
+      # A1's own candidate-detection logging — regardless of whether
+      # this mention turns out to be a real switch intent (still the
+      # agent's judgment) or gets blocked by the dirty-files check
+      # right after; this only records WHEN a candidate was first seen.
+      # HAS_DIFFERENT_TICKET is safe to embed unquoted — it only ever
+      # holds a value already matched by the same strict character
+      # class as the exact-match regex elsewhere in this file.
+      python3 -c "
+import json
+with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
+    f.write(json.dumps({'ticket_id': '$HAS_DIFFERENT_TICKET', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
+"
       # Narrowed 2026-09-02, docs/uncommitted-work-gate-narrowing-proposal.md
       # — same per-episode baseline comparison as the C1 check above, not
       # whole-repo dirtiness. current-ticket.json still reflects the OLD
@@ -340,9 +359,51 @@ fi
 
 # A pending Jira validation is in flight — needs the real agent hook.
 # Let the prompt through untouched, no note needed (ticket_id is empty
-# in this branch, nothing to report).
+# in this branch, nothing to report). BUT — added 2026-09-02, root-cause
+# fix, confirmed live: PRIORITY CHECK's own "runs on every message,
+# regardless of what it's about" instruction validated a STALE
+# typed_ticket here while silently discarding the user's CURRENT
+# message, which was itself a real, different, ticket-ID-shaped answer
+# ("ANG-123" typed while a stale "ANG-4571" sat in this file from an
+# earlier branch's terminal switch attempt — post-checkout now also
+# clears this file, but a stale one can still exist from before that
+# fix, or from other timing). Same reasoning and same pattern as the
+# pending-baseline-confirm.json stale-marker fix above: the user's most
+# recent, explicit input should win over old pending state — check
+# deterministically whether the CURRENT message is itself a different
+# candidate before standing down for the stale one.
+PC_TYPED_TICKET=""
 if [ -f .kiro/pending-ticket-check.json ]; then
-  exit 0
+  PC_TYPED_TICKET=$(python3 -c "
+import json
+try:
+    print(json.load(open('.kiro/pending-ticket-check.json')).get('typed_ticket', ''))
+except Exception:
+    print('')
+")
+  PC_CANDIDATE=""
+  if echo "$PROMPT" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
+    PC_CANDIDATE="$PROMPT"
+  else
+    PC_NORM=$(echo "$PROMPT" \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]*-[[:space:]]*/-/' \
+      | tr '[:lower:]' '[:upper:]')
+    if echo "$PC_NORM" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
+      PC_CANDIDATE="$PC_NORM"
+    fi
+  fi
+  if [ -n "$PC_CANDIDATE" ] && [ "$PC_CANDIDATE" != "$PC_TYPED_TICKET" ]; then
+    # A genuinely new, different candidate — discard the stale pending
+    # check and fall through to the normal candidate-detection logic
+    # below, which will handle $PROMPT exactly like a fresh CASE A1
+    # answer. Deliberately NOT exiting here.
+    rm -f .kiro/pending-ticket-check.json
+  else
+    # Message matches the pending value, or isn't ticket-shaped at all
+    # (e.g. unrelated chat) — PRIORITY CHECK's original behavior is
+    # correct here, stand down as before.
+    exit 0
+  fi
 fi
 
 # The agent hook may be mid-way through a "refresh credits, then
