@@ -3382,3 +3382,101 @@ tracked, does not reliably trigger CASE C2's switch question.
       hook has no visibility into whether the agent's actual chat
       response included the ask, or whether it genuinely waited for a
       reply before proceeding).
+
+## 2026-09-02 (same day, follow-up): the ask-skip recurred live, a second time — and this occurrence rules out the marker as a cause
+- [x] **Real transcript, immediately after the stale-marker fix landed
+      on `test-case-a`:** branch switch reset `current-ticket.json` to
+      `{}` (expected). User typed `ANG-123`. Agent read the empty file,
+      then went straight to running the credit-read/baseline command —
+      no profile-icon ask anywhere in the transcript. Confirmed
+      directly against real file state, not just the transcript text.
+- [x] **New, important fact this occurrence adds: the marker was
+      correctly populated.** `.kiro/pending-baseline-confirm.json`
+      showed `{"ticket_id": "ANG-123"}` — matching `current-
+      ticket.json`'s ticket_id exactly. The stale-marker fix
+      (`469ac6e`) worked correctly here; there was no mismatch for the
+      agent to be confused by. **This rules out the marker mechanics as
+      the cause of this specific skip** — the agent had a correct,
+      ready marker in front of it and still skipped the ask. Direct,
+      live confirmation of the exact "hard limit" already named in
+      `docs/case-a1-ask-skip-mitigation-proposal.md`'s feasibility
+      analysis: an agent that gets the marker right and still skips the
+      ask is indistinguishable, by any deterministic signal, from a
+      compliant run.
+- [x] **Second live occurrence of this exact failure shape in one
+      session** — strengthens, without proving, the wording-fix
+      hypothesis from the same proposal (the "already wrote the
+      marker... do NOT write it yourself. Then ask..." framing
+      immediately preceding the required action).
+- **Given this new evidence, approved to build the wording fix now
+  (previously held for review-only).**
+- [x] **Built, both sites, edited and verified individually per
+      established practice.** `aidlc-ask-for-ticket-if-missing.json`:
+      CASE A1's main path and its fuzzy sub-path both reordered so the
+      required action ("You must still ask...") leads, with the
+      "marker already written" note demoted to a scoped parenthetical
+      ("that ONE specific action, and only that one, is not yours to
+      repeat") afterward, instead of leading with what's already done.
+      One grammar pass needed on the fuzzy path — the first attempt
+      awkwardly split "ask once... and wait for their reply" around
+      the parenthetical; caught on verification and re-applied so
+      "ask, and wait, before proceeding" stays one flowing clause,
+      matching the original structure, with the emphasis and
+      parenthetical following it rather than interrupting it.
+      `docs/case-a1-ask-skip-mitigation-proposal.md` updated to reflect
+      item 1 built, item 2 still proposal-only.
+- **No live test possible for this one, stated honestly, same as the
+  proposal itself said going in:** this is a text-only change with no
+  deterministic branch to exercise — verification is JSON validity plus
+  a direct read-back confirming the reordering and grammar, not a
+  live-tested behavioral case. Whether it actually reduces the skip
+  rate can only be judged by watching for further live occurrences,
+  not by anything testable here.
+
+## 2026-09-02 (same day, follow-up): feature request — warm combined greeting+ask for an empty-ticket session's first message, proposed not built
+- [x] **Real transcript, same narration bug recurring** (`I need to
+      read the current ticket file to determine what to do` for a
+      plain `hi`, both `Session greeting` and `Ticket fast path` and
+      the agent hook all firing on one turn) — same open, unresolved
+      "does exit 2 suppress the sibling agent hook" question already
+      logged, not re-investigated here.
+- [x] **New, separate request:** when no ticket is set, the session's
+      first response should be a warm greeting combined with the
+      ticket question, not the current cold bare question (or the
+      narrated non-answer it's actually getting). This directly
+      conflicts with the HARD GATE's deliberately absolute "ONLY the
+      ticket question... no exceptions" wording, so proposed properly
+      rather than built directly.
+- [x] **Proposal written:**
+      `docs/session-start-greeting-exception-proposal.md` — a
+      one-shot deterministic marker (`.kiro/pending-session-greeting.
+      json`), written by `aidlc-session-greeting.json` on `SessionStart`
+      when the ticket is empty, checked and consumed by the fast-path
+      before its bottom HARD GATE block. Deliberately does NOT rely on
+      the agent inferring "this is turn 1 of the session" from
+      conversational context (unconfirmed whether `SessionStart`'s
+      context reliably carries into the next `UserPromptSubmit` turn)
+      — the marker is the sole, deterministic trigger. The HARD GATE's
+      own carve-out is tied to a literal stdout signal
+      (`SESSION_START_GREETING_EXCEPTION:`), not "use your judgment,"
+      to avoid the exception itself becoming a new place to
+      rationalize narration.
+- **Not built — awaiting review, same process as everything else
+  tonight.**
+- [x] **Reviewer caught a real gap before approving, confirmed by
+      trace, not dismissed:** asked whether a stale marker could
+      linger and misfire on a later, unrelated turn. Traced the
+      script directly — the original design checked the marker at
+      exactly one point, and five other branches in the same script
+      exit earlier, before ever reaching it, so an ordinary first
+      message (not just a rare session interruption) could leave the
+      marker unexamined indefinitely. Confirmed honestly: as
+      originally written, yes, it could have misfired. Fixed with a
+      time-based expiry (300s, reusing the exact timeout already used
+      twice elsewhere in this project) judged by the marker's own
+      recorded age rather than by whether it happened to be reached
+      soon after creation — doesn't matter which branch fires first or
+      how many turns pass. Proposal doc updated in place with the fix,
+      an explicit answer to the question asked, and 3 new/revised test
+      cases (expiry, malformed timestamp, hygiene cleanup). Still not
+      built — back for review with the fix included.
