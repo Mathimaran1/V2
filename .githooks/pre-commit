@@ -223,6 +223,24 @@ EPISODE_ID=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_id // e
 # machine's `date` is GNU coreutils, confirmed by every other `date -u`
 # call already in this file working correctly.
 EPISODE_STARTED_AT=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.episode_started_at // empty')
+
+# docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02 —
+# same "read from current-ticket.json, empty means not-yet-computed"
+# pattern as every other optional field above, computed once by
+# ticket-gate-fastpath.sh. GAP_SECONDS is a number, safe with the
+# usual `// empty` (jq's `//` only treats `false`/`null` as falsy, not
+# 0). CONFIRMED is a real boolean and needs an explicit null-check
+# instead — caught live in this build's own end-to-end test:
+# `false // empty` evaluates to `empty` in jq (false counts as falsy
+# for the alternative operator, same as null), which silently
+# collapsed the one value this whole feature exists to surface
+# reliably into a false "n/a". Exactly the class of bug the existing
+# CREDITS_DELTA "null"-literal convention below was already built to
+# avoid — missed it here on the first pass, fixed after the real test
+# caught it, not assumed correct.
+ASK_CONFIRMED_GAP_SECONDS=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.ask_confirmed_gap_seconds // empty')
+ASK_CONFIRMED=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r 'if .ask_confirmed == null then "" else (.ask_confirmed | tostring) end')
+
 ELAPSED_MINUTES="null"
 if [ -n "$EPISODE_STARTED_AT" ]; then
   EPISODE_START_EPOCH=$(date -u -d "$EPISODE_STARTED_AT" +%s 2>/dev/null)
@@ -348,6 +366,8 @@ KIRO_CREDIT_CONFIDENCE="$CREDIT_CONFIDENCE"
 KIRO_EPISODE_ID="$EPISODE_ID"
 KIRO_EPISODE_STARTED_AT="$EPISODE_STARTED_AT"
 KIRO_ELAPSED_MINUTES="$ELAPSED_MINUTES"
+KIRO_ASK_CONFIRMED_GAP_SECONDS="$ASK_CONFIRMED_GAP_SECONDS"
+KIRO_ASK_CONFIRMED="$ASK_CONFIRMED"
 INNER_EOF
 
 # 4b. Optional debug convenience copy — ONE file per ticket, overwritten

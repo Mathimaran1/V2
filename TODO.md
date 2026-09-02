@@ -3480,3 +3480,213 @@ tracked, does not reliably trigger CASE C2's switch question.
       an explicit answer to the question asked, and 3 new/revised test
       cases (expiry, malformed timestamp, hygiene cleanup). Still not
       built — back for review with the fix included.
+- [x] **Approved and built — all 4 sites, edited and verified
+      individually.** `aidlc-session-greeting.json`'s empty-ticket
+      branch now writes `.kiro/pending-session-greeting.json` with a
+      real `created_at` timestamp. `scripts/ticket-gate-fastpath.sh`
+      gets the age-checked block (300s, matching this project's
+      existing timeout convention) right before the bottom HARD GATE,
+      plus a hygiene cleanup at the existing `CURRENT_TRACKED_TICKET`
+      branch. `aidlc-ask-for-ticket-if-missing.json`'s HARD GATE
+      preamble gets the one narrow carve-out sentence, tied to a
+      literal stdout signal, not agent judgment.
+- [x] **Live-tested 7/7, real file state checked after every case, in
+      an isolated scratch repo:**
+      1. Fresh session, plain greeting → marker written with a real
+         timestamp, consumed correctly, `SESSION_START_GREETING_
+         EXCEPTION` emitted, exit 0, marker gone after.
+      2. Second message, same session → marker already consumed,
+         bare-question HARD GATE fires normally, unchanged from today.
+      3. First message already a real ticket ID → marker correctly
+         left untouched (exact-match branch exits first); a debugging
+         catch along the way (a leftover `pending-baseline-confirm.json`
+         from that same step correctly took precedence and blocked the
+         next check — confirmed as *existing*, correct behavior, not a
+         new bug, and cleaned up to isolate the actual test). Then, on
+         a LATER turn with the ticket empty again and the same marker
+         still fresh, confirmed it's still correctly found and applied
+         — proving age, not turn-count, is what's judged.
+      4. Ticket already tracked → no marker written at all.
+      5. **Expiry — the exact scenario asked about.** A marker aged 10
+         real minutes: correctly deleted, NO exception line emitted,
+         normal bare-question HARD GATE fires instead. Directly
+         confirms a stale marker cannot misfire on a later, unrelated
+         turn.
+      6. Malformed timestamp (bad string, empty string, and fully
+         malformed JSON — three variants): all three fail safe, no
+         crash even under `set -euo pipefail`, no exception applied.
+      7. Hygiene cleanup: marker present + `ticket_id` already
+         non-empty → marker correctly removed via the
+         `CURRENT_TRACKED_TICKET` branch, even though the expiry-check
+         block at the bottom of the script is never reached on that
+         turn.
+- **All 7 cases passed on this attempt — no further fixes needed. Real
+  repo state (`ANG-123`, git log) confirmed unchanged throughout.**
+
+## 2026-09-02 (same day, follow-up): narration content ban — third pass at the same guard, built, honest about what could and couldn't be verified from here
+- [x] **Not presented as a fresh fix — this is a third failure of the
+      same guard.** The NARRATION GUARD already exists, already bans a
+      list of example phrases, already documents its own 2026-08-31
+      origin, and has now failed three distinct ways: two transcripts
+      already pasted tonight with different phrasing than any banned
+      example, and now a direct report of the agent using the literal
+      internal names `pending-baseline-confirm.json` and "HARD GATE" in
+      a visible response.
+- [x] **Proposed** (`docs/narration-content-ban-proposal.md`): a
+      second, independent axis — a ban on specific CONTENT (literal
+      internal file/rule names, via a pattern: anything under `.kiro/`
+      or `.kiro-tracking/`, and named mechanisms like HARD GATE,
+      MARKER FILE, CASE A1) rather than only banning example sentence
+      phrasings. Content-based bans generalize past the exact wording
+      of any one leak; phrase-based bans only cover what's on the list.
+- [x] **Built and verified what's actually verifiable from this
+      session:** the sentence is present, unique, reads clearly on
+      direct read-back, JSON stays valid, and every internal
+      file/mechanism name referenced in the new sentence was checked
+      against the real prompt/repo to confirm none are stale or
+      misspelled.
+- [x] **Stated plainly, not glossed over: "build and test — confirm a
+      real response comes back clean" could only be half done from
+      here.** Built: yes. Live-verified with a real Kiro response: NO
+      — this Claude Code session has no mechanism to drive Kiro's own
+      agent and observe a real turn's output. Every confirmed finding
+      and fix tonight that touched agent *behavior* (not command-hook
+      logic) was verified by the user running a real turn and pasting
+      the transcript back — that's the only verification path that
+      exists for this category of change, named explicitly rather than
+      faked. Also named honestly: unlike tonight's other fixes, this
+      one has no deterministic fallback available at all — Kiro's hook
+      system (per this project's own understanding of its documented
+      trigger types) has no output-filtering or post-response hook, so
+      there is no code-enforced version of "never mention this
+      filename" the way there was for "never skip this file write."
+- **Awaiting a real live transcript to confirm — not claiming this is
+  closed.**
+
+## 2026-09-02 (same day, follow-up): wording fix confirmed NOT effective (3/3 skips) + a real blind spot found in the time-window confidence check
+- [x] **Narration fix confirmed working, cleanly, by a real transcript
+      — no internal file/rule names anywhere.** Good, real result, not
+      re-litigated here.
+- [x] **Same transcript surfaced a THIRD live ask-skip occurrence — and
+      the wording fix (`f937afa`, `11:35:59 IST`) was confirmed active
+      on disk 18+ minutes before this episode's baseline was written
+      (`11:54:26 IST`).** Not a case of testing against stale
+      instructions. **The wording fix is now confirmed NOT effective:
+      3/3 confirmed skips, with the fix demonstrably active for the
+      third.** Stated plainly rather than left as "inconclusive with
+      one data point."
+- [x] **`Kiro-Confidence` checked with real evidence, not
+      speculation:** no commit existed yet for the episode in question
+      — made a real test commit (`4085b0e`) against it. Result:
+      `Kiro-Confidence: low`, `Kiro-Credits: 0.0000`,
+      `Kiro-Elapsed-Minutes: 2.95`. The deterministic elapsed-time
+      check does correctly catch this specific, immediate case.
+- [x] **A real, newly-discovered blind spot in that same check, not
+      just a known limitation restated:** `Kiro-Confidence`'s
+      elapsed-since-baseline logic (`.githooks/pre-commit`) is a
+      rolling time window, not a permanent record. A commit made more
+      than ~5 minutes after this same, never-honestly-confirmed
+      baseline was written will very likely read `Kiro-Confidence:
+      high` — purely because enough time passed, with zero
+      relationship to whether the ask ever happened. **This is worse
+      than the original ask-skip going silently uncaught: it's false
+      confidence being actively presented about stale data**, on a
+      delay, not a limitation someone reading the trailers would
+      already know to discount.
+- [x] **Investigated, honestly, whether existing marker-file behavior
+      (created and properly consumed, vs. left behind) is a usable
+      signal for "was the ask actually observed to complete" — found
+      it is NOT, with real evidence, not assumed to work.** Checked
+      `.kiro/pending-baseline-confirm.json` for the CURRENT episode
+      (the one just confirmed to have skipped its ask): **absent** —
+      cleaned up despite the skip. Compare against the earlier
+      2026-09-02 finding ("a THIRD marker-related failure variant"),
+      where the marker WAS left behind (with a stale, mismatched
+      ticket_id) after a different skipped-ask occurrence. **Two
+      confirmed instances of the same underlying failure produced
+      opposite marker-cleanup outcomes** — the agent's own prose-driven
+      marker deletion is inconsistent across occurrences, so "was the
+      marker properly consumed" cannot be trusted as the signal on its
+      own. This finding is what actually shaped the proposal below —
+      not assumed away, investigated first as explicitly instructed.
+- **Priority proposal, not a hold item, written immediately below —
+  the confidence flag's blind spot means the system can currently
+  present false confidence in stale data, worse than the original
+  problem being silently uncaught.**
+- [x] **Proposal written:** `docs/kiro-confirmed-persistent-signal-
+      proposal.md` — not a rolling time window, a permanent,
+      once-computed fact per episode (`Kiro-Confirmed: true/false/n/a`),
+      built on a timestamp delta between candidate-detection (already
+      reliable, command-hook-only) and baseline-write
+      (`episode_started_at`, already accurate) — NOT on marker-cleanup
+      behavior, which the investigation above just showed is
+      inconsistent. Also updates the earlier, now-superseded
+      confidence-flag sketch (`docs/case-a1-ask-skip-mitigation-
+      proposal.md`, item 2) to point to this one. Not built — proposed
+      as priority, per explicit instruction, awaiting review.
+
+## 2026-09-02 (same day, follow-up): Kiro-Confirmed built and live-tested, one real jq bug caught by the build's own test and fixed before shipping
+- [x] **Reviewer asked two questions before final approval — both
+      answered with real investigation, not reassurance, before
+      building:** (1) threshold calibration — revised to ship
+      `Kiro-Confirmed-Gap-Seconds` unconditionally (the raw fact, never
+      wrong) alongside a `Kiro-Confirmed` boolean using a named,
+      tunable, explicitly-`PROVISIONAL` constant (15s, seeded from this
+      session's real observed turn timings), with calibration named as
+      a defined follow-up using the same "confirmed live" evidence
+      standard as every other bug tonight — not a permanent guess. (2)
+      `calculate-pr-credits.sh` — confirmed by direct grep it's the
+      only script anywhere that reads `Kiro-*` trailers, and didn't
+      touch `Kiro-Confirmed` before this build; extended it using this
+      project's own already-proven presence-sentinel pattern (`Kiro-
+      Elapsed-Minutes`'s `ELAPSED_PRESENT`), not a new one.
+- [x] **Built, 5 sites, each verified individually:**
+      `scripts/ticket-gate-fastpath.sh` (3 candidate-detection-log
+      writes, agent-invisible — reusing the exact points already
+      proven for the marker fix; one compute-and-cache block at
+      `CURRENT_TRACKED_TICKET`), `.githooks/pre-commit` (read + pass to
+      `commit-msg`), `.githooks/commit-msg` (two new trailers),
+      `scripts/calculate-pr-credits.sh` (ticket-level aggregation).
+- [x] **A real bug caught by this build's own end-to-end test, not
+      shipped blind:** the first real commit through the whole pipeline
+      showed `Kiro-Confirmed: n/a` for a case that should have read
+      `false`. Root cause: `jq -r '.ask_confirmed // empty'` — jq's `//`
+      treats a JSON `false` as falsy, identical to `null`, silently
+      collapsing the one value this entire feature exists to surface
+      into a false "n/a". The exact class of bug this project's own
+      `Kiro-Credits`/`Kiro-Elapsed-Minutes` "null"-literal convention
+      already exists to avoid — missed on the first pass for a boolean
+      specifically, caught by the real test rather than assumed
+      correct, fixed with an explicit `if .ask_confirmed == null`
+      check instead of `//`, re-verified with the same real commit
+      pipeline afterward.
+- [x] **Live-tested, real commits and real trailers throughout, not
+      simulated output:**
+      1. Genuine gap (60s) → `Kiro-Confirmed: true`,
+         `Kiro-Confirmed-Gap-Seconds: 60`, real commit.
+      2/6. **Same-turn write, replaying the actual 3rd occurrence** →
+         `Kiro-Confirmed: false` — this is the exact case that caught
+         the jq bug above; failed on the first attempt, fixed, passed
+         on the second, both against real commits.
+      3. No detection-log entry at all (simulating CASE C1/PRIORITY
+         CHECK) → `Kiro-Confirmed: n/a`, `Kiro-Confirmed-Gap-Seconds:
+         n/a` — no crash, no false classification.
+      4. Multiple episodes, same ticket, one entry backdated to 2020 →
+         correctly matched the recent entry (3.0s gap), not the
+         6-year-old one.
+      5. Second commit against the same episode after tampering with
+         the detection log → value unchanged, confirmed cached not
+         recomputed.
+      7. Gap-seconds confirmed correct in both the true and false
+         cases above.
+      8. `calculate-pr-credits.sh`, 4 real tickets via real (fabricated
+         trailer) commits: single-episode `true` → `confirmed`;
+         single-episode `false` → `UNCONFIRMED baseline` surfaced
+         explicitly; no `Kiro-Confirmed` trailer at all → `confirmed:
+         n/a`, distinct from both, exactly what was asked to be
+         confirmed; two episodes on one ticket, one true one false →
+         `false` correctly wins and surfaces prominently, not averaged
+         or hidden.
+- **All 8 test-plan cases pass (after the one real fix found and
+  applied mid-testing). Real repo state (`ANG-123`, git log) confirmed
+  unchanged throughout — all testing done in isolated scratch repos.**

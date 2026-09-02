@@ -26,6 +26,7 @@ DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
 KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
 KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
 KIRO_EPISODE_STARTED_AT="" KIRO_ELAPSED_MINUTES=""
+KIRO_ASK_CONFIRMED_GAP_SECONDS="" KIRO_ASK_CONFIRMED=""
 # shellcheck disable=SC1090
 [ -f "$DATA_FILE" ] && . "$DATA_FILE"
 rm -f "$DATA_FILE"
@@ -50,6 +51,13 @@ SOURCE="${KIRO_TICKET_SOURCE:-n/a}"
 EPISODE_STARTED="${KIRO_EPISODE_STARTED_AT:-none}"
 ELAPSED="${KIRO_ELAPSED_MINUTES:-n/a}"
 [ "$ELAPSED" = "null" ] && ELAPSED="n/a"
+# docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02 —
+# same fallback pattern as CREDITS/ELAPSED above. Unlike those two,
+# pre-commit hands these across via a real jq `// empty` read (not a
+# hand-written "null" literal), so an absent value arrives here already
+# genuinely empty — no extra "null" string check needed.
+ASK_GAP="${KIRO_ASK_CONFIRMED_GAP_SECONDS:-n/a}"
+ASK_CONFIRMED="${KIRO_ASK_CONFIRMED:-n/a}"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"
@@ -59,3 +67,5 @@ echo "Kiro-Session: $SESSION_ID" >> "$1"
 echo "Kiro-Source: $SOURCE" >> "$1"
 echo "Kiro-Episode-Started: $EPISODE_STARTED" >> "$1"
 echo "Kiro-Elapsed-Minutes: $ELAPSED" >> "$1"
+echo "Kiro-Confirmed-Gap-Seconds: $ASK_GAP" >> "$1"
+echo "Kiro-Confirmed: $ASK_CONFIRMED" >> "$1"

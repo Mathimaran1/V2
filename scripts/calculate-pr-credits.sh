@@ -93,6 +93,7 @@ for sha in $SHAS; do
   EPISODE=$(echo "$MSG" | grep -oP '^Kiro-Episode: \K.*' || true)
   CREDITS=$(echo "$MSG" | grep -oP '^Kiro-Credits: \K.*' || true)
   ELAPSED=$(echo "$MSG" | grep -oP '^Kiro-Elapsed-Minutes: \K.*' || true)
+  CONFIRMED=$(echo "$MSG" | grep -oP '^Kiro-Confirmed: \K.*' || true)
   if [ -z "$TICKET" ] || [ "$CREDITS" = "n/a" ] || [ -z "$CREDITS" ]; then
     continue
   fi
@@ -105,7 +106,20 @@ for sha in $SHAS; do
   else
     ELAPSED_PRESENT="1"
   fi
-  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT" >> "$TMPFILE"
+  # docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02
+  # — same presence-sentinel pattern as ELAPSED_PRESENT just above,
+  # reused rather than reinvented. Kiro-Confirmed is a real boolean
+  # (true/false), so "missing" must be tracked separately from either
+  # value — the exact class of bug this build's own end-to-end test
+  # already caught once, in the jq read that feeds this field (a plain
+  # `// empty`-style collapse would treat `false` as "absent" here too).
+  if [ -z "$CONFIRMED" ] || [ "$CONFIRMED" = "n/a" ]; then
+    CONFIRMED_PRESENT="0"
+    CONFIRMED="n/a"
+  else
+    CONFIRMED_PRESENT="1"
+  fi
+  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT|$CONFIRMED_PRESENT|$CONFIRMED" >> "$TMPFILE"
 done
 
 if [ ! -s "$TMPFILE" ]; then
@@ -117,6 +131,18 @@ fi
 # (ticket, episode), then sum across episodes per ticket — applied to
 # both credits and elapsed minutes independently, since a stale elapsed
 # reading and a stale credits reading aren't the same kind of gap.
+# docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02:
+# Kiro-Confirmed aggregation is per-TICKET, not per-episode-then-summed
+# like credits/elapsed — it's not a cumulative quantity, it's a
+# yes/no fact about whether each episode's baseline was ever actually
+# confirmed. Kiro-Confirmed is cached once per episode (never
+# recomputed on later commits within it), so every commit in the same
+# episode carries the identical value — checking "does ANY commit for
+# this ticket show false" is exactly equivalent to "does any episode
+# for this ticket have an unconfirmed baseline," which is the thing
+# worth surfacing. A false anywhere wins over a true anywhere else,
+# deliberately — per this whole proposal's own reasoning, a hidden
+# unconfirmed episode is worse than a confirmed one looking unremarkable.
 awk -F'|' '
 {
   key = $1 "|" $2
@@ -126,6 +152,10 @@ awk -F'|' '
     if ($4+0 > maxElapsed[key]) maxElapsed[key] = $4+0
   }
   ticket[key] = $1
+  if ($6+0 == 1) {
+    if ($7 == "false") confirmedFalse[$1] = 1
+    if ($7 == "true") confirmedTrue[$1] = 1
+  }
 }
 END {
   for (k in maxCredits) {
@@ -139,10 +169,18 @@ END {
   }
   for (t in seen) {
     if (t in tickerHasElapsed) {
-      printf "%s: %.4f credits, %.2f minutes\n", t, totalCredits[t], totalElapsed[t]
+      line = sprintf("%s: %.4f credits, %.2f minutes", t, totalCredits[t], totalElapsed[t])
     } else {
-      printf "%s: %.4f credits, n/a minutes\n", t, totalCredits[t]
+      line = sprintf("%s: %.4f credits, n/a minutes", t, totalCredits[t])
     }
+    if (t in confirmedFalse) {
+      line = line ", UNCONFIRMED baseline (ask may have been skipped)"
+    } else if (t in confirmedTrue) {
+      line = line ", confirmed"
+    } else {
+      line = line ", confirmed: n/a"
+    }
+    print line
   }
 }
 ' "$TMPFILE" | sort

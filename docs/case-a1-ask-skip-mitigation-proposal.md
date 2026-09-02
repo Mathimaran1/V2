@@ -92,6 +92,19 @@ not being oversold as a fix for the failure mode itself.
 
 ## Item 2: feasibility of a deterministic after-the-fact confidence flag
 
+**Superseded, 2026-09-02, see `docs/kiro-confirmed-persistent-signal-
+proposal.md`.** The wording fix above (item 1) is now confirmed NOT
+effective (3/3 live ask-skips, with the fix active for the third). A
+priority follow-up investigated whether the log-based mechanism sketched
+below actually works and found a real problem with it: it only checked
+whether a detection record ever *existed*, which — now that the marker
+fix makes candidate detection reliable for any real ticket — is true in
+essentially all cases, ask skipped or not, making it far weaker than
+described here. The superseding proposal uses a *timestamp delta*
+between detection and baseline-write instead of mere existence, and is
+the current, better-evidenced design. This section is kept for its own
+record, not as the live plan.
+
 ### What was investigated
 
 Whether a command hook can detect, on a later turn, that a baseline

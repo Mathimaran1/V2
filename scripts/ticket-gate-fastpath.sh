@@ -201,6 +201,83 @@ fi
 # This closes that gap by not requiring the agent to go fetch the fact
 # at all; it's just already sitting in context before reasoning starts.
 if [ -n "$TICKET_ID" ]; then
+  # docs/session-start-greeting-exception-proposal.md, added 2026-09-02:
+  # hygiene only, not required for correctness (the expiry check on the
+  # marker itself already prevents any incorrect firing on its own) —
+  # a ticket is now set, so any leftover session-start greeting marker
+  # is superseded; remove it here rather than leaving it to sit in
+  # .kiro/ indefinitely on the common path where the expiry-check block
+  # further down is never reached again to clean it up itself.
+  rm -f .kiro/pending-session-greeting.json
+
+  # docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02:
+  # compute Kiro-Confirmed / Kiro-Confirmed-Gap-Seconds once per episode,
+  # cached (never recomputed once set — the "'ask_confirmed_gap_seconds'
+  # not in data" guard below). Uses the candidate-detection log, NOT the
+  # pending-baseline-confirm.json marker's own lifecycle — confirmed live
+  # 2026-09-02 that marker cleanup is agent-prose behavior and produced
+  # opposite outcomes across two confirmed occurrences of the identical
+  # underlying failure, making it unusable as the signal. The detection
+  # log is agent-invisible — only this script ever reads or writes it —
+  # so it can't be affected by agent behavior the same way.
+  python3 -c "
+import json
+from datetime import datetime
+
+CTJ = '.kiro/current-ticket.json'
+try:
+    with open(CTJ) as f:
+        data = json.load(f)
+except Exception:
+    data = None
+
+if data is not None and 'ask_confirmed_gap_seconds' not in data:
+    tid = data.get('ticket_id', '')
+    started_at = data.get('episode_started_at', '')
+    gap = None
+    started_dt = None
+    if tid and started_at:
+        try:
+            started_dt = datetime.strptime(started_at, '%Y-%m-%dT%H:%M:%SZ')
+        except Exception:
+            started_dt = None
+    if started_dt is not None:
+        best = None
+        try:
+            with open('.kiro/candidate-detection-log.jsonl') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    if entry.get('ticket_id') != tid:
+                        continue
+                    try:
+                        edt = datetime.strptime(entry.get('detected_at', ''), '%Y-%m-%dT%H:%M:%SZ')
+                    except Exception:
+                        continue
+                    if edt <= started_dt and (best is None or edt > best):
+                        best = edt
+        except Exception:
+            pass
+        if best is not None:
+            gap = (started_dt - best).total_seconds()
+    if gap is not None:
+        data['ask_confirmed_gap_seconds'] = gap
+        # PROVISIONAL threshold — not yet calibrated against real
+        # occurrences, see docs/kiro-confirmed-persistent-signal-proposal.md.
+        THRESHOLD_SECONDS = 15
+        data['ask_confirmed'] = gap >= THRESHOLD_SECONDS
+    else:
+        data['ask_confirmed_gap_seconds'] = None
+        data['ask_confirmed'] = None
+    with open(CTJ, 'w') as f:
+        json.dump(data, f)
+"
+
   # --- Early dirty-files gate for C2 detection turn (added 2026-09-01,
   # ANG-4571, second pass — closes the gap the first pass missed).
   # The existing dirty-files check above only fires when pending_switch_to
@@ -301,6 +378,12 @@ if [ -f .kiro/pending-baseline-confirm.json ]; then
   if [ -n "$STALE_CANDIDATE" ]; then
     # Safe to embed unquoted — STALE_CANDIDATE only ever holds a value
     # that already matched the strict ticket-ID regex above.
+    #
+    # docs/kiro-confirmed-persistent-signal-proposal.md, added
+    # 2026-09-02: candidate-detection log entry too, but only inside
+    # the same "actually a new candidate" guard as the marker update
+    # itself — a no-op repeat of the same stale value isn't a fresh
+    # detection.
     python3 -c "
 import json
 try:
@@ -311,6 +394,8 @@ except Exception:
 if d.get('ticket_id') != '$STALE_CANDIDATE':
     d['ticket_id'] = '$STALE_CANDIDATE'
     json.dump(d, open('.kiro/pending-baseline-confirm.json', 'w'))
+    with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
+        f.write(json.dumps({'ticket_id': '$STALE_CANDIDATE', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
   fi
   exit 0
@@ -327,9 +412,19 @@ if echo "$PROMPT" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$' || [ "$PROMPT" = "none" ]
   # clobber risk. PROMPT is safe to embed unquoted in the python
   # literal below — it already matched the strict regex, or is the
   # literal string 'none'; no quotes/apostrophes possible in either.
+  #
+  # docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02:
+  # also append to the candidate-detection log, agent-invisible (the
+  # agent never reads or writes this file, unlike the marker, so it
+  # can't be inconsistently affected by agent cleanup behavior the way
+  # the marker was — confirmed live 2026-09-02, two skipped-ask
+  # occurrences left the marker in opposite states). This is the
+  # deterministic "detected_at" half of the gap-seconds calculation.
   python3 -c "
 import json
 json.dump({'awaiting': True, 'ticket_id': '$PROMPT'}, open('.kiro/pending-baseline-confirm.json', 'w'))
+with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
+    f.write(json.dumps({'ticket_id': '$PROMPT', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
   exit 0  # exact match — needs Jira validation, hand off to agent hook
 fi
@@ -358,15 +453,58 @@ if echo "$NORMALIZED" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
   # normalized candidate (also regex-validated safe to embed) — this
   # is what's being confirmed by the "Did you mean X?" question, so
   # it's what the marker should carry.
+  #
+  # docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02:
+  # candidate-detection log, same as the exact-match branch above.
   python3 -c "
 import json
 json.dump({'awaiting': True, 'ticket_id': '$NORMALIZED'}, open('.kiro/pending-baseline-confirm.json', 'w'))
+with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
+    f.write(json.dumps({'ticket_id': '$NORMALIZED', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
   # exit 0 → stdout (not stderr) is what Kiro adds to the agent's
   # context, per kiro.dev/docs/hooks/actions/ — stderr is only read on
   # a non-zero exit, which this isn't.
   echo "FUZZY_TICKET_MATCH: raw message \"$PROMPT\" normalizes to $NORMALIZED after removing whitespace/case — not an exact match, confirm with the user before treating this as their answer."
   exit 0
+fi
+
+# docs/session-start-greeting-exception-proposal.md, added 2026-09-02:
+# before the bare HARD GATE question, check for a pending session-start
+# greeting marker (written by aidlc-session-greeting.json on
+# SessionStart, when ticket_id was empty). Judged by AGE
+# (created_at), not by whether it happened to be reached soon after
+# creation — five OTHER branches in this script (CURRENT_TRACKED_TICKET,
+# pending-ticket-check.json, pending-baseline-confirm.json, exact-match,
+# fuzzy-match) all exit before this point, so an ordinary first message
+# could leave the marker unexamined for any number of turns; age-based
+# expiry means it doesn't matter how many, or which branch fired.
+# Deleted unconditionally the moment it's examined, matched or not —
+# no path through this block leaves the file behind.
+if [ -f .kiro/pending-session-greeting.json ]; then
+  CREATED_AT=$(python3 -c "
+import json
+try:
+    print(json.load(open('.kiro/pending-session-greeting.json')).get('created_at', ''))
+except Exception:
+    print('')
+")
+  CREATED_EPOCH=$(date -u -d "$CREATED_AT" +%s 2>/dev/null || echo 0)
+  NOW_EPOCH=$(date +%s)
+  AGE=$((NOW_EPOCH - CREATED_EPOCH))
+  rm -f .kiro/pending-session-greeting.json
+  # 300s (5 min) — same timeout already established twice elsewhere in
+  # this project (pre-commit's profile-click prompt, post-commit's
+  # switch question), reused rather than inventing a new number.
+  # CREATED_EPOCH falls back to 0 on a missing/malformed timestamp,
+  # making AGE huge and >=300 naturally — fails safe into "expired,"
+  # never into treating a broken read as fresh.
+  if [ -n "$CREATED_AT" ] && [ "$AGE" -ge 0 ] && [ "$AGE" -lt 300 ]; then
+    echo "SESSION_START_GREETING_EXCEPTION: this is the first message of a new session with no ticket tracked — per the HARD GATE's own stated exception below, combine a brief warm greeting with the ticket question in ONE natural message (e.g. \"Hey! Good to see you — which Jira ticket are you working on today?\"). Do not narrate hook logic, do not explain how you know this. This applies to THIS turn only."
+    exit 0
+  fi
+  # Expired, or malformed — marker already deleted above; fall through
+  # to the normal bare-question HARD GATE below, unchanged.
 fi
 
 # No ticket, and this message isn't answering the question even loosely
