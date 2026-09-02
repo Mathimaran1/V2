@@ -3127,3 +3127,150 @@ tracked, does not reliably trigger CASE C2's switch question.
          shows 0/10 double-commits.
 - **All 5 live-test cases passed. Real repo state (`ANG-4571`, git log)
   confirmed unchanged throughout — verified directly, not assumed.**
+
+## 2026-09-02: two new findings from a real live transcript — logged, not investigated further tonight
+- [ ] **`current-ticket.json` reset to literal `{}`, cause unconfirmed.**
+      Checked directly: this repo has exactly one code path that writes
+      literal `{}` — `.githooks/post-checkout`, only on a real branch
+      checkout (`$3=1`). `git reflog` shows no checkout since
+      2026-08-27, ruling that out. File mtime (~10:53 UTC) is after the
+      prior entry's final state check (confirmed `ANG-4571` at that
+      point) and before this entry. No other write site found in
+      `.githooks/*` or `scripts/*`. Best guess, NOT confirmed: the
+      agent itself wrote it directly via a file-write tool call during
+      its own confused "I need to check the current ticket status"
+      turn — plausible but unverified; reporting the gap honestly
+      rather than asserting a cause.
+- [ ] **Real transcript shows a command hook's `exit 2` may not be
+      suppressing the sibling agent hook, contradicting an earlier
+      finding tonight — needs investigation, not concluded.** Two
+      consecutive `"hi"` turns (ticket_id empty) both showed BOTH
+      `Ticket fast path` (command hook) AND `Ask/validate ticket`
+      (agent hook) as having run, non-trivial credits spent each time
+      (0.08, 0.1 — not the ~0 the fast-path exists to guarantee), and
+      neither turn ever displayed the bare ticket question — instead,
+      narrated commentary ("I need to check the current ticket
+      status...") that also violates the agent hook's own long-standing
+      NARRATION GUARD. Running the actual current script by hand
+      against the actual current repo state reproduces a clean `exit 2`
+      with the bare question — so the divergence is specifically
+      between the live Kiro invocation and a hand-fed synthetic stdin
+      payload, not the script's own logic as testable in isolation.
+      This directly contradicts the 2026-08-31 finding above ("#1 as
+      originally scoped is architecturally impossible... there is no
+      separate sibling agent-hook turn for a command hook to
+      suppress") — either that documented Kiro behavior doesn't hold
+      in practice, or something about the real invocation differs from
+      what's reproducible here; not distinguished. No access to Kiro's
+      own internals/session logs to go further from this session alone.
+- **Deliberately not investigated further tonight, per explicit
+  instruction — logged with the evidence gathered so far, picked up
+  next time.**
+
+## 2026-09-02: reviewed commits made outside this session (`7b3da75`, `554897b`) — uncommitted-work gate has a real false-positive gap, narrowing proposed
+- [x] **Confirmed the SIGPIPE fix landed correctly, just not isolated
+      the way this session's commits have been.** Byte-for-byte
+      identical to what was built and tested, but bundled inside
+      `7b3da75` — a 2195-insertion, 15-file commit made by a live Kiro
+      session (real `Kiro-Session` ID, generic message), not this one.
+      Nothing to surgically stage for it anymore; already in history.
+- [x] **New content reviewed, not built by this session:** an
+      "uncommitted-work gate" (blocks a ticket switch when `git status
+      --porcelain` is non-empty) and a `SessionStart` greeting hook.
+      Both syntax/JSON-valid, no hard-crash risk.
+- [x] **Real, confirmed gap in the uncommitted-work gate:** `git status
+      --porcelain` shows `M TODO.md` on this repo RIGHT NOW — this
+      project's own normal workflow (surgical staging, deliberately
+      leaving other reviewed work uncommitted) means the repo is
+      dirty almost continuously. The gate's signal doesn't distinguish
+      that from genuinely forgotten work; as written it would block
+      close to every switch under this project's actual practice, not
+      just the rare real case.
+- [ ] **Investigated whether this false positive caused the 2195-line
+      bundled commit — NOT confirmed, reporting honestly rather than
+      asserting a link.** The gate logs nothing on a block — no direct
+      evidence exists either way. Circumstantial support only: the
+      gate's own proposal doc documents encountering a dirty tree
+      (from its own in-development changes) and correctly flagging it
+      during this exact window; two ticket-episode switches (`ANG-4571`
+      then back to `ANG-123`) landed within 2m22s of each other,
+      bracketing the large commit. Consistent with the hypothesis, not
+      proof of it.
+- [x] **Proposal written for both fixes**
+      (`docs/uncommitted-work-gate-narrowing-proposal.md`): replace the
+      whole-repo dirtiness check with a per-episode baseline (`git
+      status --porcelain`, captured at the same instant as each
+      episode's credit baseline, stored as `dirty_snapshot_at_episode_
+      start`; only lines NOT in that baseline count as "new" and
+      block). Verified the core comparison logic directly in an
+      isolated scratch repo before writing it up: pre-existing dirt
+      correctly produces no block, genuinely new dirt correctly does.
+      Also proposes a hook-health.log line for the gate (it currently
+      logs nothing, which is why the causal question above couldn't be
+      answered) and the `aidlc-session-greeting.json` hardcoded-path
+      fix (`git rev-parse --show-toplevel`, verified working, replacing
+      the hardcoded `/home/srimathi/Desktop/v1`).
+- **Not built — awaiting review, same process as everything else
+  tonight.**
+
+## 2026-09-02 (same session, follow-up): uncommitted-work-gate narrowing built and live-tested 7/7, one site at a time per explicit instruction
+- [x] **Built with individual, one-at-a-time verification per site — not
+      a bulk find-and-replace** (explicitly requested, matching how the
+      A2 cascading-corruption bug was originally caught): each of the 7
+      sites was read, edited, then verified (syntax check + content
+      check, and a standalone dry-run for the 3 python one-liners
+      embedded in the agent hook prompt) before moving to the next.
+      - Sites 1–2 (`scripts/ticket-gate-fastpath.sh`, C1 and C2 checks):
+        whole-repo `git status --porcelain` replaced with a comparison
+        against `dirty_snapshot_at_episode_start`; both add a
+        `hook_status=uncommitted-work-gate-blocked` log line (closes
+        the traceability gap from the prior entry).
+      - Site 3+7 combined (`.githooks/post-commit`'s `'none'` branch):
+        same comparison on the read side; the write side migrated from
+        the old "print 3 lines, bash reconstructs JSON" pattern to
+        writing `current-ticket.json` directly from python (matching
+        Option A2), now also capturing `dirty_snapshot_at_episode_
+        start` at the same instant as the credit baseline.
+      - Sites 4–6 (agent hook prompt, CASE A1/C1/PRIORITY CHECK): each
+        bundled write command extended with `subprocess` + a
+        `dirty_snapshot_at_episode_start` field, verified individually
+        via `python3 -m json.tool` on the JSON.load() of the resulting
+        edit, matched-once assertions before applying each.
+      - Bonus small fix: `aidlc-session-greeting.json`'s hardcoded
+        `/home/srimathi/Desktop/v1` replaced with `git rev-parse
+        --show-toplevel`.
+- [x] **7/7 live-test cases PASS, real file/git state checked after
+      every one, in an isolated scratch repo (real `.githooks/*`
+      wired via `core.hooksPath`) — real `ANG-123` state untouched
+      throughout, verified directly before and after:**
+      1. Pre-existing dirt allowed through — same dirt still present
+         at switch time, exit 0, no block.
+      2. Genuinely new work still blocks — exit 2, and the block
+         message correctly showed ONLY the new file.
+      3. Mixed case — confirmed by the same run as (2): pre-existing
+         AND new dirt both present, only the new file listed.
+      4. Backward compatibility — a `current-ticket.json` with no
+         `dirty_snapshot_at_episode_start` field at all correctly falls
+         back to blocking on any dirt (today's old behavior), not
+         silently passing everything.
+      5. All 4 capture sites confirmed producing valid JSON with the
+         new field — sites 4–6 via targeted dry-runs, site 7 via a
+         REAL fully-interactive `git commit` driven through a genuine
+         pty (`pty.fork()`, after an initial `subprocess.Popen`-based
+         attempt failed because redirecting fds alone doesn't make a
+         pty the process's controlling terminal — `pty.fork()` does).
+      6. `hook_status=uncommitted-work-gate-blocked site=fastpath-c1`
+         confirmed present in `.kiro-tracking/hook-health.log` after a
+         real block — the exact log line the prior entry's causal
+         investigation didn't have available.
+      7. Session-greeting fix confirmed resolving correctly when run
+         from a deeply nested subdirectory, not just the repo root.
+- [x] **One real test-harness gap caught along the way, not glossed
+      over:** the first scratch repo setup showed spurious "dirty"
+      results for `.githooks/`, `.kiro/`, `scripts/` — they'd been
+      copied into the scratch repo but never committed there (unlike
+      the real repo, where they're tracked), plus `.kiro-tracking/`
+      needed the same `.gitignore` entry the real repo already has.
+      Fixed the harness, not the (correctly-behaving) code.
+- **All 7 cases passed on this attempt — no further fixes needed. Real
+  repo state (`ANG-123`, git log) confirmed unchanged throughout.**

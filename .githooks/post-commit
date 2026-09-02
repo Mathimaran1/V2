@@ -108,21 +108,39 @@ INNER_EOF
     # explicit confirmation message, exactly like a real ticket would
     # get.
     #
-    # --- Uncommitted-work check (added 2026-09-01, ANG-4571). Before
-    # switching, verify the working tree is clean — any uncommitted
-    # changes done under the OLD ticket would end up committed under
-    # the NEW episode if the user forgets. This is a warning, not a
-    # hard block: the user already committed (we're in post-commit),
-    # but may have made new changes since. If dirty, warn and abort
-    # the switch; current-ticket.json stays untouched.
-    DIRTY_FILES=$(git status --porcelain 2>/dev/null)
-    if [ -n "$DIRTY_FILES" ]; then
-      echo "⚠️  You have uncommitted changes — please commit or stash your work before" >&2
+    # --- Uncommitted-work check (added 2026-09-01, ANG-4571; narrowed
+    # 2026-09-02, docs/uncommitted-work-gate-narrowing-proposal.md).
+    # Before switching, verify no NEW uncommitted changes have appeared
+    # since the current episode began — not whole-repo dirtiness
+    # (confirmed live 2026-09-01: this project's own normal workflow
+    # leaves the repo dirty almost continuously, which would have
+    # blocked nearly every switch here too). Compare against the OLD
+    # episode's dirty_snapshot_at_episode_start, still sitting in
+    # current-ticket.json at this point (the switch hasn't happened
+    # yet). This is a warning, not a hard block: the user already
+    # committed (we're in post-commit), but may have made new changes
+    # since. If genuinely new dirt exists, warn and abort the switch;
+    # current-ticket.json stays untouched.
+    NEW_DIRTY=$(python3 -c "
+import json, subprocess
+try:
+    with open('.kiro/current-ticket.json') as f:
+        data = json.load(f)
+    baseline = set(data.get('dirty_snapshot_at_episode_start', []) or [])
+except Exception:
+    baseline = set()
+current = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True).stdout.splitlines()
+print('\n'.join(l for l in current if l not in baseline))
+")
+    if [ -n "$NEW_DIRTY" ]; then
+      echo "⚠️  You have uncommitted changes (new since this episode began) — please commit or stash your work before" >&2
       echo "   switching tickets, so it gets tracked under the right ticket." >&2
       echo "   NOT switching. current-ticket.json left untouched." >&2
       echo "" >&2
-      echo "   Dirty files:" >&2
-      echo "$DIRTY_FILES" | sed 's/^/   /' >&2
+      echo "   New dirty files:" >&2
+      echo "$NEW_DIRTY" | sed 's/^/   /' >&2
+      mkdir -p .kiro-tracking
+      echo "hook_status=uncommitted-work-gate-blocked ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) site=post-commit-none" >> .kiro-tracking/hook-health.log
     else
     #
     # Time tracking, added 2026-08-28 — same pattern as credits: a
@@ -133,22 +151,33 @@ INNER_EOF
     # is read in the SAME python process as the credit baseline, not a
     # separate `date` call after the fact, so both halves of "this
     # episode's starting point" are captured at the same instant.
-    RESULT=$(python3 -c "
-import sqlite3, json, os, time, secrets
+    # dirty_snapshot_at_episode_start (added 2026-09-02) is captured
+    # here too, same instant, same reasoning — this new episode's own
+    # baseline for the uncommitted-work gate. Writes current-
+    # ticket.json directly from python now, matching Option A2
+    # (docs/deterministic-bookkeeping-proposal.md) — hand-assembling a
+    # field containing arbitrary file-path text in bash is exactly the
+    # fragile pattern that fix already exists to avoid.
+    WROTE=$(python3 -c "
+import sqlite3, json, os, time, secrets, subprocess
 con = sqlite3.connect(os.path.expanduser('~/.config/Kiro/User/globalStorage/state.vscdb'))
 row = con.execute(\"SELECT value FROM ItemTable WHERE key='kiro.kiroAgent'\").fetchone()
 val = row[0]
 val = val.decode('utf-8') if isinstance(val, bytes) else val
 usage = json.loads(val)['kiro.resourceNotifications.usageState']['usageBreakdowns'][0]['currentUsage']
+episode_id = 'ep_' + format(int(time.time()), 'x') + secrets.token_hex(3)
+started_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+dirty = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True).stdout.splitlines()
+data = {'ticket_id': 'none', 'credits_at_ticket_start': usage, 'episode_id': episode_id, 'episode_started_at': started_at, 'dirty_snapshot_at_episode_start': dirty}
+json.dump(data, open('.kiro/current-ticket.json', 'w'))
 print(usage)
-print('ep_' + format(int(time.time()), 'x') + secrets.token_hex(3))
-print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+print(episode_id)
+print(started_at)
 " 2>/dev/null)
-    CREDITS_NOW=$(echo "$RESULT" | sed -n '1p')
-    NEW_EPISODE=$(echo "$RESULT" | sed -n '2p')
-    EPISODE_STARTED_AT=$(echo "$RESULT" | sed -n '3p')
+    CREDITS_NOW=$(echo "$WROTE" | sed -n '1p')
+    NEW_EPISODE=$(echo "$WROTE" | sed -n '2p')
+    EPISODE_STARTED_AT=$(echo "$WROTE" | sed -n '3p')
     if [ -n "$CREDITS_NOW" ] && [ -n "$NEW_EPISODE" ] && [ -n "$EPISODE_STARTED_AT" ]; then
-      echo "{\"ticket_id\": \"none\", \"credits_at_ticket_start\": $CREDITS_NOW, \"episode_id\": \"$NEW_EPISODE\", \"episode_started_at\": \"$EPISODE_STARTED_AT\"}" > .kiro/current-ticket.json
       echo "✅ Switched to 'none' — new episode $NEW_EPISODE, baseline $CREDITS_NOW credits, started $EPISODE_STARTED_AT." >&2
       echo "   Tracked explicitly as no-ticket work, not a silent default." >&2
     else

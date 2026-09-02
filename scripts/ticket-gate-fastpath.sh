@@ -115,22 +115,40 @@ except Exception:
     print('')
 ")
   if [ -n "$PENDING_SWITCH_TO" ] && [ -n "$EPISODE_ID" ]; then
-    # --- Uncommitted-work gate (added 2026-09-01, ANG-4571). A ticket
-    # switch overwrites current-ticket.json with a fresh episode —
-    # any uncommitted user work that was done under the OLD ticket
-    # would end up committed under the NEW ticket's episode if the
-    # user forgets to commit first. Check git status --porcelain:
-    # if anything is dirty (staged or unstaged), block with exit 2
-    # and tell the user to commit or stash before switching.
+    # --- Uncommitted-work gate (added 2026-09-01, ANG-4571; narrowed
+    # 2026-09-02, docs/uncommitted-work-gate-narrowing-proposal.md). A
+    # ticket switch overwrites current-ticket.json with a fresh episode
+    # — any uncommitted user work done under the OLD ticket would end
+    # up committed under the NEW ticket's episode if the user forgets
+    # to commit first. NOT a whole-repo dirtiness check anymore —
+    # confirmed live 2026-09-01: this project's own normal workflow
+    # leaves the repo dirty almost continuously (surgical staging,
+    # deliberately-separate pending work), so a plain `git status
+    # --porcelain` check would have blocked nearly every switch.
+    # Compare against dirty_snapshot_at_episode_start (captured at the
+    # same instant as this episode's credit baseline, below) — only
+    # lines NOT present at episode start count as genuinely new work.
     # This fires on EVERY turn where pending_switch_to is set, not
     # just the confirming turn — same "gate on pending, not on
     # judgment" rationale as the pre-switch commit gate below.
-    DIRTY_FILES=$(git status --porcelain 2>/dev/null)
-    if [ -n "$DIRTY_FILES" ]; then
-      echo "You have uncommitted changes — please commit or stash your work on $TICKET_ID before switching to $PENDING_SWITCH_TO. This ensures your current work gets tracked under the right ticket." >&2
+    NEW_DIRTY=$(python3 -c "
+import json, subprocess
+try:
+    with open('.kiro/current-ticket.json') as f:
+        data = json.load(f)
+    baseline = set(data.get('dirty_snapshot_at_episode_start', []) or [])
+except Exception:
+    baseline = set()
+current = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True).stdout.splitlines()
+print('\n'.join(l for l in current if l not in baseline))
+")
+    if [ -n "$NEW_DIRTY" ]; then
+      echo "You have uncommitted changes (new since this episode began) — please commit or stash your work on $TICKET_ID before switching to $PENDING_SWITCH_TO. This ensures your current work gets tracked under the right ticket." >&2
       echo "" >&2
-      echo "Dirty files:" >&2
-      echo "$DIRTY_FILES" >&2
+      echo "New dirty files:" >&2
+      echo "$NEW_DIRTY" >&2
+      mkdir -p .kiro-tracking
+      echo "hook_status=uncommitted-work-gate-blocked ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) site=fastpath-c1" >> .kiro-tracking/hook-health.log
       exit 2
     fi
 
@@ -209,12 +227,31 @@ if [ -n "$TICKET_ID" ]; then
       fi
     done
     if [ -n "$HAS_DIFFERENT_TICKET" ]; then
-      DIRTY_FILES=$(git status --porcelain 2>/dev/null)
-      if [ -n "$DIRTY_FILES" ]; then
-        echo "You have uncommitted changes — please commit or stash your work on $TICKET_ID before switching to $HAS_DIFFERENT_TICKET. This ensures your current work gets tracked under the right ticket." >&2
+      # Narrowed 2026-09-02, docs/uncommitted-work-gate-narrowing-proposal.md
+      # — same per-episode baseline comparison as the C1 check above, not
+      # whole-repo dirtiness. current-ticket.json still reflects the OLD
+      # (current) episode here, since pending_switch_to hasn't been
+      # written yet at this point in the flow — its
+      # dirty_snapshot_at_episode_start is the right baseline to compare
+      # against.
+      NEW_DIRTY=$(python3 -c "
+import json, subprocess
+try:
+    with open('.kiro/current-ticket.json') as f:
+        data = json.load(f)
+    baseline = set(data.get('dirty_snapshot_at_episode_start', []) or [])
+except Exception:
+    baseline = set()
+current = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True).stdout.splitlines()
+print('\n'.join(l for l in current if l not in baseline))
+")
+      if [ -n "$NEW_DIRTY" ]; then
+        echo "You have uncommitted changes (new since this episode began) — please commit or stash your work on $TICKET_ID before switching to $HAS_DIFFERENT_TICKET. This ensures your current work gets tracked under the right ticket." >&2
         echo "" >&2
-        echo "Dirty files:" >&2
-        echo "$DIRTY_FILES" >&2
+        echo "New dirty files:" >&2
+        echo "$NEW_DIRTY" >&2
+        mkdir -p .kiro-tracking
+        echo "hook_status=uncommitted-work-gate-blocked ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) site=fastpath-c2" >> .kiro-tracking/hook-health.log
         exit 2
       fi
     fi
