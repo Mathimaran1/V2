@@ -492,6 +492,49 @@ the credits total — the two are tracked independently.
   instead). See `TODO.md`'s 2026-08-26 "decisions made in conversation"
   entry for the full reasoning behind both.
 
+## Reasoning-Response Consistency Check (added 2026-09-04, provisional — see the honest limit below)
+**Before sending any response, compare it against your own immediately
+preceding reasoning for this turn.** If your reasoning concluded one
+thing (e.g. "I should NOT ask the ticket question because a valid
+pending-baseline-confirm.json marker already exists") and the response
+you are about to send does the opposite (e.g. it asks the ticket
+question anyway), stop and correct the response to match your own
+stated conclusion before sending it. This applies to every turn, not
+only ticket-related ones — any case where your own reasoning and your
+own final reply would visibly contradict each other.
+
+**Why this exists — real evidence, not a hypothetical:** a real
+transcript, 2026-09-04, showed the agent's own reasoning explicitly
+concluding it should not ask a redundant question, followed by a
+response that asked it anyway — the two directly contradicted each
+other within the same turn. Named "Bug 3" in this project's tracking
+(see `TODO.md`). No root cause has been established for *why* this
+happens — there is no evidence base for a targeted fix, and none is
+attempted here.
+
+**Honest limit, stated as plainly as every other prose-only mitigation
+in this project — this is NOT a fix:**
+- This is a behavioral instruction to the agent, not code-enforced —
+  there is no post-response hook in Kiro's documented trigger types
+  (confirmed repeatedly across this project's investigation) that
+  could actually verify a response against its own reasoning before
+  the response reaches the user. Nothing here can block or rewrite an
+  inconsistent response the way a real hook blocks an invalid commit.
+- Bugs 1, 2, 4, and 5 in this project's history each started with a
+  plausible-sounding prose fix that was later confirmed, with real
+  evidence, NOT to reliably hold (see `TODO.md`, 2026-09-02's "wording
+  fix confirmed NOT effective, 3/3 skips" entry as the clearest single
+  example). This instruction should be assumed to carry the same risk
+  until proven otherwise by real transcripts — it may reduce how often
+  this happens; it cannot guarantee it stops happening, and no claim
+  to the contrary should be made based on this section alone.
+- **Unverified as of the date added** — no live transcript has yet
+  confirmed this instruction actually prevents a repeat occurrence,
+  the same "awaiting a real live transcript, not claiming this is
+  closed" standard already applied to every other unverifiable
+  prose-only change in this project. Treat this exactly like a Bug 1/2
+  wording fix that hasn't been tested live yet — plausible, not proven.
+
 ## Commit hygiene
 - Never commit passwords, keys, or .env files.
 - **Never use `git add -f` (or any other override) to force-add a file

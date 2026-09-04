@@ -36,14 +36,31 @@
 #   - the message IS a candidate answer (ticket-ID shape, or 'none') —
 #     still needs Jira validation + the credit-baseline capture flow
 #
-# NOT YET LIVE-VERIFIED (inferred from kiro.dev's docs, not observed
-# running): the exact stdin JSON shape read below, whether exit 2's
-# stderr is shown to the user verbatim or paraphrased by another agent
-# pass, and whether a blocked command hook suppresses the sibling agent
-# hook on the same trigger (if it doesn't, this script's exit 2 may not
-# actually prevent the agent hook's own turn from also running — test
-# this specifically). Verify all of this against a real Kiro session
-# before trusting it in production.
+# Split into its three distinct claims 2026-09-04 (were previously
+# bundled as one "NOT YET LIVE-VERIFIED" note) — one has since been
+# exercised by real usage, the other two have not, and lumping them
+# together made that difference invisible:
+#
+# - The exact stdin JSON shape read below ({"prompt": "..."}): EXERCISED
+#   SUCCESSFULLY ACROSS MANY REAL COMMITS, INFORMALLY VERIFIED. Every
+#   real commit this project has made tonight, and the real session
+#   transcripts pulled while investigating Bug 3/Bug 5, show this shape
+#   being read and parsed correctly, repeatedly, in production. Not
+#   "confirmed" — none of that was a deliberate test of this specific
+#   claim, just incidental repeated correct behavior — so it's not
+#   promoted to a tested guarantee, only downgraded from "not yet
+#   live-verified" to "exercised, informally verified."
+# - Whether exit 2's stderr is shown to the user verbatim or paraphrased
+#   by another agent pass: STILL UNTESTED, unchanged. No real
+#   transcript examined so far happened to hit the plain exit-2 bare-
+#   question path (the ones checked went through the
+#   SESSION_START_GREETING_EXCEPTION exit-0 path instead) — this claim
+#   has no more evidence behind it than it did before.
+# - Whether a blocked command hook suppresses the sibling agent hook on
+#   the same trigger (if it doesn't, this script's exit 2 may not
+#   actually prevent the agent hook's own turn from also running — test
+#   this specifically): STILL UNTESTED, unchanged. No real evidence
+#   either way has surfaced.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

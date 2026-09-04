@@ -4,6 +4,26 @@
 # baseline, so credits_used_so_far is cumulative WITHIN an episode, not
 # incremental across the whole PR).
 #
+# KNOWN ISSUE (found 2026-09-04, not fixed — see TODO.md for the full
+# git-history audit): this script's trailer extraction (the `grep -oP
+# '^Kiro-X: \K.*'` calls below) matches ANY line in a commit message
+# that starts with a trailer name, not only the real trailing trailer
+# block commit-msg actually writes. Commit fb8c2f0 (2026-08-27) has a
+# fully duplicated 6-field trailer block and produces a phantom
+# `0.0000`-credit ticket line in this script's output whenever a
+# --range includes it — real ticket totals are unaffected (the genuine
+# ANG-124 line's own numbers are still correct), but a full-history run
+# will show one spurious extra row. The same class of bug was caught
+# and fixed live twice more, in real commits, on 2026-09-04 (a
+# hand-typed trailer-shaped line, and separately a wrapped prose line
+# that happened to start with a trailer name) — neither of those is
+# still present in history, only fb8c2f0 is. Not rewritten — this
+# project does not rewrite git history without being explicitly asked.
+# A real fix would parse only the message's final trailer block (e.g.
+# by locating the blank line immediately before the first `Kiro-*:`
+# line from the end of the message) rather than grepping the whole
+# body; flagged here as a known, real limitation, not silently patched.
+#
 # Built against local git + gh, not AWS CodeCommit: this account's
 # CodeCommit access is blocked entirely (see README.md), and no git
 # remote is configured on this repo at all yet, so an aws codecommit
