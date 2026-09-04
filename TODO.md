@@ -4447,3 +4447,104 @@ instruction: no root-cause analysis, no fix design, attempted here —
 that is intentionally a separate, later task. This entry exists only
 to preserve the real evidence found, exactly as found, before anything
 else happens to it.
+
+## 2026-09-04 (same day, follow-up): Bug 3 root-cause investigation — full context reconstructed, proposal written, not built
+- [x] **Full context reconstructed with real evidence, per explicit
+      instruction, not just the two quoted lines:** verified via
+      `git log` which instruction version was active (`28ee3ed`,
+      committed 2026-09-02, still current at session time — `bc39d57`
+      landed hours later); pulled all 6 Reasoning→Say cycles of the
+      real turn (5 of 6 Says were empty internal steps, with real
+      `read_file` tool calls on `current-ticket.json`,
+      `pending-baseline-confirm.json`, and `ticket-gate-fastpath.sh` in
+      between); found and checked the real PRECURSOR session
+      (`sess_f69605a3-...`, ~2 min earlier, same workspace) that
+      actually wrote the stale marker in the first place — a real,
+      unstaged instance of Bug 4's own "proceed as if passed" fallback
+      firing along the way, and independent, retroactive confirmation
+      that Bug 5's trigger (B) targets a real recurring shape.
+- [x] **Determination made from the actual instruction text, not
+      guessed:** a genuine textual ambiguity exists — the HARD GATE's
+      exemption narrative ("marker exists → CASE A1 governs") and CASE
+      A1's own `(A1)`/`(A2)` branch split (defined purely by message
+      shape, oblivious to marker existence) point in different
+      directions for exactly this input shape, and neither branch says
+      what to do with the marker in this fallthrough. The model's OWN
+      reasoning (message 26, two cycles before the final one)
+      explicitly self-identified this exact gap live, before resolving
+      it by importing an unrelated rule. **Separately and
+      independently, the final response still contradicted even the
+      model's own (arguably wrong) resolution — a second, distinct
+      finding, not explained by the ambiguity alone.**
+- [x] **Searched for other instances, item 3: 101 total real
+      Reasoning→Say pairs across every session on this machine,
+      keyword-heuristic search → exactly 1 match (this incident).**
+      Honestly caveated: keyword search, not semantic — evidence of
+      apparent isolation on available logs, not proof of general
+      rarity.
+- [x] **Proposal written:** `docs/bug3-reasoning-output-divergence-
+      proposal.md` — two parts, matching the two distinct findings
+      (not forced into a false either/or): Part A, a narrow, targeted
+      wording addition to CASE A1's `(A2)` branch closing the specific
+      ambiguity found (marker stays untouched on fallthrough); Part B,
+      a standalone, on-demand, NOT-automatic reasoning/response
+      consistency checker script — explicitly honestly weaker than
+      Bugs 1/2/4/5's deterministic trailers (keyword-heuristic, real
+      false-negative/false-positive risk, calibrated only against this
+      session's own 101-pair sweep).
+- **Not built — awaiting review before implementation, per explicit
+  instruction. If approved, Part A stays in the same "unverified,
+  cannot be live-tested from this session" category as every other
+  prose-only change tonight; Part B is fully testable now since it's a
+  standalone script over static files.**
+
+## 2026-09-04 (same day, follow-up): Bug 3 Part A built — narrow ambiguity fix, approved and committed
+- [x] **Built exactly as proposed, narrow scope confirmed by diff:**
+      one clause added to CASE A1's `(A2)` branch in
+      `aidlc-ask-for-ticket-if-missing.json`, closing the specific gap
+      found (marker exists + non-matching message → correctly falls to
+      `(A2)`, marker left untouched). Nothing else in CASE A1, the HARD
+      GATE, or any other branch touched — `git diff --stat` shows the
+      minimal change the proposal promised, not a broader rewrite.
+      Caught and fixed a real self-inflicted JSON-escaping mistake
+      mid-edit (a literal, unescaped quote broke JSON validity on the
+      first attempt) — caught by the same `json.load()` validation
+      check used every other time tonight, reverted, redone with
+      correct escaping, re-verified clean.
+- [x] **Documented as UNVERIFIED, same honest standard as every other
+      prose-only fix tonight** — the clause itself says so, inline,
+      not just in this log entry. Cannot be live-tested from this
+      session.
+- **Part B (reasoning/response consistency checker) — clarified,
+  not yet approved.** Asked directly what it analyzes and given two
+  concrete, real examples of what it would miss (a same-meaning
+  differently-worded contradiction, and a Bug-5-shaped false-completion
+  contradiction it structurally cannot catch given its current
+  Say-side check). Awaiting a decision on whether to build it as
+  scoped, broaden it first, or not build it.
+
+## 2026-09-04 (same day, follow-up): Bug 3 Part B — deliberately NOT built, a scope decision, not an oversight
+- [x] **Considered, evaluated against real evidence, declined —
+      recorded here explicitly so this never reads as forgotten or
+      deferred to "later."** The two concrete misses demonstrated
+      while clarifying Part B's scope (a same-meaning, differently-
+      worded contradiction; a Bug-5-shaped false-completion
+      contradiction the Say-side check structurally cannot catch) were
+      judged NOT to be edge cases — they are the realistic recurrence
+      shapes a future incident would actually take. A tool this
+      narrowly tuned to one known incident's exact wording would
+      mostly only catch a near-exact repeat of itself.
+- **Decision: skip it.** Building it would manufacture a false sense
+  of coverage rather than a genuine safety margin — precisely the
+  overclaiming risk this entire investigation exists to avoid, the
+  same standard already applied to every "detectable, not fixed"
+  finding tonight. The manual investigation process demonstrated for
+  the real Bug 3 incident (pull the session log, walk the
+  Reasoning/Say pairs by hand, cross-check against the real
+  instruction text) is judged sufficient for how rarely this comes up,
+  without adding a tool whose catch rate would be this narrow.
+- **Bug 3's final state, unchanged by this decision:** Part A (the
+  narrow ambiguity fix) built and unverified, same as every other
+  prose-only fix. No detectability mechanism added for the residual
+  reasoning-output divergence risk — that gap is accepted, not
+  covered, a deliberate choice, not an unaddressed one.
