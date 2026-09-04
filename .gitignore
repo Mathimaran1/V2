@@ -20,6 +20,25 @@
 # been committed by an ordinary `git add -A` mid-conversation).
 .kiro/pending-baseline-confirm.json
 
+# docs/kiro-confirmed-persistent-signal-proposal.md — append-only,
+# command-hook-only log of when candidate ticket IDs were first
+# detected, used to compute Kiro-Confirmed's gap-seconds. Local,
+# per-machine, not tracking data itself (the real record is the
+# Kiro-Confirmed trailer on each commit). Same class of omission as
+# pending-baseline-confirm.json above, caught the same way — asked
+# directly whether this file was gitignored, checked, found it wasn't.
+.kiro/candidate-detection-log.jsonl
+
+# Session-start greeting marker (aidlc-session-greeting.json) — same
+# transient, gitignored-marker category as pending-ticket-check.json
+# and pending-baseline-confirm.json above, and the same omission
+# class: found sitting untracked-but-not-ignored on disk from a real
+# live session while investigating an unrelated bug report, 2026-09-04
+# — never added when the file itself was introduced 2026-09-02. Same
+# accidental-commit risk as candidate-detection-log.jsonl already hit
+# for real (see TODO.md).
+.kiro/pending-session-greeting.json
+
 # Sonar scan scratch output
 /tmp/sonar-scan.log
 

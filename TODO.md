@@ -3826,3 +3826,64 @@ tracked, does not reliably trigger CASE C2's switch question.
 - **Real repo state (`ANG-123`, corrected baseline, git log) confirmed
   unchanged by testing — all testing done in isolated scratch repos.
   Not committed yet.**
+
+## 2026-09-02 (same day, follow-up): candidate-detection-log.jsonl gitignored + pruned, and found it had already been committed for real
+- [x] **Checked before assuming a pattern to copy — `hook-health.log`
+      has the identical gap.** Grepped all 13 append points across
+      every hook: zero rotation/truncation/pruning logic anywhere in
+      this project for ANY log file. Nothing to match; a new design was
+      needed, reasoned from this specific log's use rather than
+      copying something that doesn't exist.
+- [x] **Design: age-based pruning is provably safe for this specific
+      log, not just convenient.** It only ever answers "most recent
+      detection for this ticket at or before this baseline's
+      timestamp" — a real gap is always seconds to minutes. An entry
+      older than 24h can never be that answer, so dropping it can only
+      push a borderline case toward `n/a` (safe, honest "don't know"),
+      never hide a real `false` skip, which is always same-turn by
+      definition. A 1000-line cap added as a backstop for a busy
+      window, not the primary mechanism.
+- [x] **Built and live-tested, real file state after each case:**
+      1. A fresh recent entry survives pruning; a 2020-dated entry and
+         a malformed (`not even json`) line are both correctly dropped.
+      2. 1500 synthetic entries, all within the 24h window → correctly
+         capped at exactly 1000, keeping the most recent, not the
+         oldest (first test attempt used an invalid ticket ID format
+         and silently triggered nothing — caught and corrected before
+         concluding the cap didn't work).
+      3. One shared `prune_candidate_detection_log()` function, called
+         after each of the script's 4 append points — not duplicated 4
+         times, not run unconditionally on every turn.
+- [x] **`.gitignore` updated — and a real, worse-than-expected finding
+      along the way:** the file wasn't just missing from `.gitignore`,
+      it had already been committed for real, by the live session's
+      own `git add .`, in commit `28ee3ed` — confirmed directly via
+      `git log --all -- .kiro/candidate-detection-log.jsonl`. Added the
+      `.gitignore` entry (won't prevent past history, only future
+      `git add`s) AND ran `git rm --cached` to actually untrack it
+      going forward — the file itself stays on disk, unaffected;
+      only git's index entry is removed. The historical commit still
+      contains a snapshot of it — not rewriting history to remove that
+      without being asked.
+- [x] **Real, organic confirmation the whole `Kiro-Confirmed` pipeline
+      is now working correctly in live use, found while checking repo
+      state, not staged as a test:** the live session's own most recent
+      real commit (`28ee3ed`) shows `Kiro-Confirmed-Gap-Seconds: 54`,
+      `Kiro-Confirmed: true` — a genuine ask-and-wait cycle, correctly
+      measured and recorded, in production, without being prompted.
+- **Not committed yet — `.gitignore`, `scripts/ticket-gate-fastpath.sh`,
+  and the `git rm --cached` staging are all sitting in the working
+  tree/index for review.**
+
+## 2026-09-04: consolidated bug report review — Bug 1's pending hygiene fix committed, plus one more gitignore gap found the same way
+- [x] **A second real instance of the exact same omission class,
+      found while reviewing Bug 1 for a consolidated report, not
+      staged as a new test:** `.kiro/pending-session-greeting.json`
+      (added 2026-09-02 alongside the session-start-greeting-exception
+      feature) was sitting on disk from a real live session,
+      untracked but NOT in `.gitignore` — same accidental-commit risk
+      `candidate-detection-log.jsonl` already hit for real. Added to
+      `.gitignore` now, same commit as the already-tested
+      `candidate-detection-log.jsonl` fix above.
+- [x] **Committed for real** — see commit trailers for the real
+      episode/credit values this landed under.

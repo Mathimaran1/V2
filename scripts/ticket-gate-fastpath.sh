@@ -49,6 +49,55 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# docs/kiro-confirmed-persistent-signal-proposal.md — candidate-
+# detection-log.jsonl is append-only with no bound otherwise; nothing
+# in this project rotates or truncates ANY log file (checked directly
+# — hook-health.log has the identical gap, unaddressed). Added
+# 2026-09-02, reasoned from this log's specific use: it only ever
+# answers "what's the most recent detection for this ticket at or
+# before this baseline's timestamp" — a gap that in every real case is
+# seconds to minutes (a real ask-wait cycle, or a same-turn skip). An
+# entry older than 24h can never be the answer to a CURRENT lookup, so
+# pruning it can only push a borderline case toward n/a (the safe,
+# honest "don't know" state) — never hide a real `false` skip, which
+# is always same-turn by definition. A 1000-line cap is a backstop for
+# a busy day within that window, not the primary mechanism. Called
+# once after each of this script's 4 append points, not run
+# unconditionally on every turn — no need to touch the file at all
+# when nothing is being appended to it.
+prune_candidate_detection_log() {
+  python3 -c "
+import json
+from datetime import datetime, timedelta
+
+PATH = '.kiro/candidate-detection-log.jsonl'
+CUTOFF = datetime.utcnow() - timedelta(hours=24)
+try:
+    with open(PATH) as f:
+        lines = f.readlines()
+except Exception:
+    lines = []
+
+kept = []
+for line in lines:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        entry = json.loads(line)
+        dt = datetime.strptime(entry.get('detected_at', ''), '%Y-%m-%dT%H:%M:%SZ')
+    except Exception:
+        continue  # unparseable line — drop it too, cheap hygiene
+    if dt >= CUTOFF:
+        kept.append(line)
+
+kept = kept[-1000:]
+with open(PATH, 'w') as f:
+    if kept:
+        f.write('\n'.join(kept) + '\n')
+"
+}
+
 # Read the UserPromptSubmit stdin payload via python3 — same tool this
 # repo already relies on elsewhere (see current-ticket.json's baseline
 # capture) since jq isn't confirmed installed on every machine and
@@ -323,6 +372,7 @@ import json
 with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
     f.write(json.dumps({'ticket_id': '$HAS_DIFFERENT_TICKET', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
+      prune_candidate_detection_log
       # Narrowed 2026-09-02, docs/uncommitted-work-gate-narrowing-proposal.md
       # — same per-episode baseline comparison as the C1 check above, not
       # whole-repo dirtiness. current-ticket.json still reflects the OLD
@@ -458,6 +508,7 @@ if d.get('ticket_id') != '$STALE_CANDIDATE':
     with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
         f.write(json.dumps({'ticket_id': '$STALE_CANDIDATE', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
+    prune_candidate_detection_log
   fi
   exit 0
 fi
@@ -487,6 +538,7 @@ json.dump({'awaiting': True, 'ticket_id': '$PROMPT'}, open('.kiro/pending-baseli
 with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
     f.write(json.dumps({'ticket_id': '$PROMPT', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
+  prune_candidate_detection_log
   exit 0  # exact match — needs Jira validation, hand off to agent hook
 fi
 
@@ -523,6 +575,7 @@ json.dump({'awaiting': True, 'ticket_id': '$NORMALIZED'}, open('.kiro/pending-ba
 with open('.kiro/candidate-detection-log.jsonl', 'a') as f:
     f.write(json.dumps({'ticket_id': '$NORMALIZED', 'detected_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'}) + '\n')
 "
+  prune_candidate_detection_log
   # exit 0 → stdout (not stderr) is what Kiro adds to the agent's
   # context, per kiro.dev/docs/hooks/actions/ — stderr is only read on
   # a non-zero exit, which this isn't.
