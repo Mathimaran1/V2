@@ -475,6 +475,39 @@ fi
 # rather than shared, matching this file's existing style — the
 # exact-match regex already appears in several places).
 if [ -f .kiro/pending-baseline-confirm.json ]; then
+  # docs/bug5-hollow-confirmation-detectability-proposal.md, added
+  # 2026-09-04 — shared setup for all three triggers below: marker age
+  # via file mtime (reusing the same mechanism pre-commit's own
+  # CREDIT_CONFIDENCE freshness check already uses for
+  # current-ticket.json — no timestamp field exists inside this
+  # marker's own JSON content) and its stored ticket_id, read once.
+  MARKER_MTIME=$(stat -c %Y .kiro/pending-baseline-confirm.json 2>/dev/null || echo 0)
+  MARKER_AGE_SECONDS=$(( $(date +%s) - MARKER_MTIME ))
+  MARKER_TICKET_ID=$(python3 -c "
+import json
+try:
+    print(json.load(open('.kiro/pending-baseline-confirm.json')).get('ticket_id',''))
+except Exception:
+    print('')
+")
+
+  # Trigger (B) — a fresh SessionStart co-occurring with a still-present
+  # marker. Fires unconditionally, no age gate: a session boundary is a
+  # real, already-detected event (aidlc-session-greeting.json writes
+  # this file on SessionStart ONLY when ticket_id is empty — see that
+  # file's own precondition), not a guessed duration. Read-only check —
+  # does NOT consume/delete pending-session-greeting.json; that file's
+  # own lifecycle stays owned by the session-greeting-exception feature.
+  # Accepted trade-off, documented in the proposal: if SessionStart can
+  # re-fire mid-genuine-wait (a reconnect/reload — unconfirmed from this
+  # session, no way to verify), this would also log — over-logging over
+  # under-logging, deliberately, same asymmetry as Kiro-Confirmed's own
+  # aggregation logic.
+  if [ -f .kiro/pending-session-greeting.json ]; then
+    mkdir -p .kiro-tracking
+    echo "hook_status=pending-baseline-confirm-abandoned-session-boundary ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket_id=$MARKER_TICKET_ID marker_age_seconds=$MARKER_AGE_SECONDS" >> .kiro-tracking/hook-health.log
+  fi
+
   STALE_CANDIDATE=""
   if echo "$PROMPT" | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+$'; then
     STALE_CANDIDATE="$PROMPT"
@@ -486,9 +519,30 @@ if [ -f .kiro/pending-baseline-confirm.json ]; then
       STALE_CANDIDATE="$STALE_NORM"
     fi
   fi
+
+  # docs/bug5-hollow-confirmation-detectability-proposal.md — a genuine
+  # supersede is a non-empty candidate that DIFFERS from the marker's
+  # own stored value; a same-value repeat is not a supersede (matches
+  # the python block's own pre-existing equality check below) and must
+  # still be eligible for trigger (C)'s backstop, not silently excluded
+  # from it the way a naive if/elif on STALE_CANDIDATE emptiness would.
+  IS_SUPERSEDE=0
+  if [ -n "$STALE_CANDIDATE" ] && [ "$STALE_CANDIDATE" != "$MARKER_TICKET_ID" ]; then
+    IS_SUPERSEDE=1
+  fi
+
+  if [ "$IS_SUPERSEDE" = "1" ]; then
+    # Trigger (A) — logged BEFORE the marker gets overwritten below,
+    # unconditionally, no age gate — same reasoning as (B).
+    mkdir -p .kiro-tracking
+    echo "hook_status=pending-baseline-confirm-abandoned-superseded ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) old_ticket_id=$MARKER_TICKET_ID new_ticket_id=$STALE_CANDIDATE marker_age_seconds=$MARKER_AGE_SECONDS" >> .kiro-tracking/hook-health.log
+  fi
+
   if [ -n "$STALE_CANDIDATE" ]; then
     # Safe to embed unquoted — STALE_CANDIDATE only ever holds a value
-    # that already matched the strict ticket-ID regex above.
+    # that already matched the strict ticket-ID regex above. Unchanged
+    # from before this proposal — still runs (and still correctly
+    # no-ops on a same-value repeat) for any non-empty STALE_CANDIDATE.
     #
     # docs/kiro-confirmed-persistent-signal-proposal.md, added
     # 2026-09-02: candidate-detection log entry too, but only inside
@@ -510,6 +564,22 @@ if d.get('ticket_id') != '$STALE_CANDIDATE':
 "
     prune_candidate_detection_log
   fi
+
+  if [ "$IS_SUPERSEDE" = "0" ] && [ ! -f .kiro/pending-session-greeting.json ]; then
+    # Trigger (C) — backstop only. Neither (A) (no genuine supersede
+    # this turn) nor (B) (no session-boundary marker present) applied.
+    # Only here does age actually gate the log line — the one place a
+    # threshold is still used, and only for the tail case conditions
+    # can't reach (same session, indefinitely, no new candidate or
+    # restart ever occurs). 300s reused from pre-commit's own
+    # profile-click prompt timeout — see the proposal doc for the full
+    # reasoning.
+    if [ "$MARKER_AGE_SECONDS" -ge 300 ]; then
+      mkdir -p .kiro-tracking
+      echo "hook_status=pending-baseline-confirm-possibly-abandoned ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) ticket_id=$MARKER_TICKET_ID marker_age_seconds=$MARKER_AGE_SECONDS" >> .kiro-tracking/hook-health.log
+    fi
+  fi
+
   exit 0
 fi
 

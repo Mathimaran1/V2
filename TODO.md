@@ -4036,3 +4036,169 @@ tracked, does not reliably trigger CASE C2's switch question.
       final trailer block, e.g. by locating the blank line before
       `Kiro-Ticket:` and only grepping after it) — flagged for a
       future pass, not silently left undocumented.
+
+## 2026-09-04 (same day, follow-up): a NEW, more severe failure mode found — claimed success with zero underlying action, distinct from the still-blocked reasoning/output-divergence report
+- [x] **User-reported incident independently verified against real, live
+      file state, not accepted at face value.** Claim: Kiro told the
+      user "ANG-123 confirmed and now being tracked," but
+      `current-ticket.json` was never written, and cost for the
+      exchange (0.23 credits) was far below the 0.5–1.7 range every
+      genuine confirmation has cost all project. Checked directly:
+      - `.kiro/current-ticket.json` right now: `{}` — confirmed, no
+        baseline exists.
+      - `.kiro/pending-baseline-confirm.json` right now:
+        `{"awaiting": true, "ticket_id": "ANG-123"}`, mtime
+        `2026-09-04T06:27:24Z` (still sitting there, un-cleaned-up,
+        2+ minutes later at time of checking).
+      - `.kiro/candidate-detection-log.jsonl`'s newest (and only very
+        recent) entry: `{"ticket_id": "ANG-123", "detected_at":
+        "2026-09-04T06:27:24Z"}` — same timestamp, same ticket, exact
+        match to the marker.
+      - `.kiro-tracking/hook-health.log` has no entries after
+        `06:25:12Z` (this session's last real commit) — no commit has
+        happened since, consistent with no baseline write ever having
+        occurred.
+      - `.kiro/pending-ticket-check.json` does not exist — this was a
+        genuine CASE A1 detection, not a PRIORITY CHECK path.
+      **Every real file-state check matches the user's report exactly.**
+- [x] **Important architectural confirmation, not just a repeat of the
+      known ask-skip pattern:** the deterministic command-hook layer
+      did its job correctly — it detected "ANG-123" as a candidate and
+      wrote `pending-baseline-confirm.json` exactly as designed, real
+      evidence above. The failure is entirely in the agent's own turn
+      after that: no Jira validation call apparent in the transcript
+      (per the user), no profile-click ask, no baseline-write command
+      ever run, no marker cleanup on either success or failure path —
+      and yet a plain, unqualified success message was still sent to
+      the user. This is not "skipped one step but got there eventually"
+      like the known ask-skip pattern (Bug 1) — it's "attempted none of
+      the required steps and still claimed the outcome," a distinct and
+      more severe failure mode.
+- [x] **The 0.23-credit cost figure is real corroborating evidence, not
+      circumstantial:** every genuine CASE A1 confirmation this project
+      has logged (ask-and-wait, Jira validation call, baseline-write
+      command) has cost 0.5–1.7 credits; a turn that skipped all of
+      that mechanically would plausibly cost far less, consistent with
+      "claimed the outcome text without doing the underlying work,"
+      not proof on its own but consistent with everything else found.
+- **Live marker state left untouched, deliberately** — `pending-
+  baseline-confirm.json` still correctly holds the real pending
+  candidate (ANG-123); the existing stale-marker mechanism (built
+  2026-09-02) will handle it correctly the next time the user answers
+  in Kiro chat, whether that answer confirms ANG-123 or supersedes it
+  with something else. No reason to intervene in live state here — this
+  isn't wrong data, it's an abandoned-but-still-valid pending flow, and
+  the marker exists exactly to survive that.
+- **Awaiting direction on classification and next steps.**
+
+## 2026-09-04 (same day, follow-up): Bug 5 proposal written
+- [x] **Proposal written:** `docs/bug5-hollow-confirmation-
+      detectability-proposal.md` — real transcript evidence (cost
+      figures across all 4 turns, cross-checked against live file
+      state) confirms the entire CASE A1 flow was hollow for this
+      incident, not just the baseline-write step: turn 2's ask cost
+      barely more than a zero-tool-call greeting (validation itself
+      likely skipped), turn 3's "confirmed and tracked" claim cost
+      even less while `current-ticket.json` stayed `{}` and
+      `pending-baseline-confirm.json` was never deleted.
+- [x] **Explicitly scoped as detection-only, not prevention**, same
+      architectural ceiling as Bug 1 — no post-response hook exists to
+      intercept a false claim before it reaches the user.
+- [x] **Threshold (300s) justified by reuse, not invented** — the same
+      value already established twice in this project (`pre-commit`'s
+      profile-click prompt, `post-commit`'s switch question) for the
+      identical judgment call: how long a real human plausibly takes on
+      an out-of-band physical action before a wait stops looking like
+      "in progress" and starts looking like "stuck." Honestly flagged
+      that this real incident's own marker was only ~2 minutes old when
+      manually checked — under this threshold — so detection is lagged
+      by design, not real-time.
+- **Awaiting review before building, per explicit instruction.**
+
+## 2026-09-04 (same day, follow-up): Bug 5 proposal revised — condition-based triggers replace time-based as primary mechanism
+- [x] **User pushed back on the v1 proposal's own honestly-flagged
+      limitation, correctly treating it as a design flaw, not a
+      caveat to accept:** the 300s threshold was NOT proven to catch
+      the real incident — its own marker was only ~2m18s old when
+      checked, under the threshold.
+- [x] **Redesigned as a hybrid, not a search for a shorter number:**
+      two condition-based triggers, both unconditional (no time gate),
+      confirmed to fire on real, already-detectable events rather than
+      a guessed duration:
+      (A) a new, different, ticket-shaped candidate superseding an
+      existing marker (reuses the fastpath script's own existing
+      stale-candidate-update code path, just adds logging to it);
+      (B) a fresh session start colliding with a still-present marker
+      — confirmed directly from `aidlc-session-greeting.json`'s own
+      shipped precondition logic (line 10) that
+      `pending-session-greeting.json` is written ONLY when ticket_id
+      is empty, which it genuinely still is for this real incident —
+      meaning trigger (B) is GUARANTEED to fire on the very next real
+      session start in this workspace, no waiting required. The
+      original 300s check is kept as trigger (C), demoted to a
+      backstop for the one remaining gap conditions can't reach (same
+      session, indefinitely, no new candidate or restart ever occurs).
+- **Proposal doc (`docs/bug5-hollow-confirmation-detectability-
+  proposal.md`) rewritten in place — Design, Failure modes, and Live
+  test plan sections all updated for the 3-trigger hybrid. Awaiting
+  review before building.**
+
+## 2026-09-04 (same day, follow-up): Bug 5 — SessionStart re-fire risk investigated before building, accepted as a trade-off
+- [x] **Asked directly, checked before assuming:** can `SessionStart`
+      fire more than once within what a user considers one continuous
+      session (reconnect, workspace reload)? Searched this codebase —
+      found one related-but-distinct "unconfirmed" note (2026-09-01/02,
+      about context propagation, not re-firing) — this exact question
+      has never been investigated, and cannot be verified from this
+      Claude Code session (no way to trigger a real Kiro
+      reconnect/reload and observe it).
+- [x] **Reasoned through the trade-off rather than guessing at a guard,
+      and rejected the obvious guard (a minimum-age floor) as not
+      actually closing the uncertainty** — the realistic version of this
+      risk is a reconnect well into a genuine 30–90+ second real-world
+      wait, not within the first few seconds, so a small floor wouldn't
+      reliably distinguish the cases.
+- **Decision: accepted trade-off, documented explicitly in the proposal
+  doc, not guarded against** — this is a diagnostic-only log line (no
+  blocking, no state mutation), and over-logging over under-logging
+  matches this project's own already-established `Kiro-Confirmed`
+  aggregation philosophy exactly. Added a 10th test case verifying this
+  behaves as documented, not as an unnoticed bug.
+- **Approved to build all 10 cases — proceeding.**
+
+## 2026-09-04 (same day, follow-up): Bug 5 built and live-tested, all 10 cases pass
+- [x] **Built in `scripts/ticket-gate-fastpath.sh`**, restructured with
+      explicit boolean logic (`IS_SUPERSEDE`) rather than a naive
+      if/elif on `STALE_CANDIDATE` emptiness — caught during design that
+      a naive structure would have silently excluded a same-ticket
+      repeat from trigger (C)'s backstop eligibility. Original
+      python/prune call pattern for the existing stale-candidate-update
+      path left byte-for-byte unchanged, only wrapped with new logging.
+- [x] **Live-tested, 10/10, in an isolated scratch repo:** trigger (A,
+      new candidate supersedes) logs and marker still updates correctly
+      (regression intact); trigger (B, session boundary) logs
+      unconditionally regardless of marker age, does NOT fire without a
+      real `pending-session-greeting.json` present, and does not
+      consume/delete that file; trigger (C, backstop) correctly gated
+      by the 300s age check, logs every time (not once) while stuck,
+      never fires under 300s; no-marker case unaffected; the accepted
+      trade-off (case 10) verified to behave exactly as documented, not
+      as an unnoticed bug.
+- [x] **Caught and fixed a real bug in the TEST HELPER, not the
+      script under test:** `backdate()`'s first draft generated the
+      touch timestamp via `date -u` (UTC) but `touch -t` interprets its
+      argument as LOCAL time — a silent +5:30 (19800s) offset that made
+      every "backdated" marker read as ~20000s old instead of the
+      intended value. Caught by a sanity check (computed age vs
+      requested age) before trusting any of the threshold-boundary
+      test results, not assumed correct from a plausible-looking
+      first run.
+- [x] **Direct replay of the real incident, not just synthetic
+      cases:** recreated the actual `ANG-123` marker plus a fresh
+      `pending-session-greeting.json` (simulating "hi" at the next real
+      session start) → correctly logged
+      `pending-baseline-confirm-abandoned-session-boundary` immediately,
+      concretely confirming — not just arguing — that this design
+      catches the real incident that motivated it.
+- **Real repo state confirmed unaffected — all testing in an isolated
+  scratch repo under `/tmp`. Awaiting commit approval.**
