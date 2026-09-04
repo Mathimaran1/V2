@@ -3887,3 +3887,78 @@ tracked, does not reliably trigger CASE C2's switch question.
       `candidate-detection-log.jsonl` fix above.
 - [x] **Committed for real** — see commit trailers for the real
       episode/credit values this landed under.
+
+## 2026-09-04 (same day, follow-up): Bug 2 root-caused (not a sync issue), Bug 4 designed+built+tested, Bug 3 confirmed genuinely blocked
+- [x] **Bug 2 (cloudId guessing, reproduced in HCM-ALCS-BE-AIDLC-TEST)
+      conclusively ruled OUT as a copy/deployment issue, with real
+      evidence, not assumption.** Found the real, Kiro-IDE-opened clone
+      at `/home/srimathi/HCM-ALCS-BE-AIDLC-TEST` (separate from an
+      earlier, never-opened `/tmp` scratch copy). Diffed its actual
+      `aidlc-ask-for-ticket-if-missing.json` against `v1`'s: byte sizes
+      differed (41533 vs 41080), but `json.load(...) == json.load(...)`
+      came back `True` — the only difference was `—` vs a literal
+      UTF-8 em-dash, pure re-serialization, zero content difference.
+      The "call getAccessibleAtlassianResources first" instruction is
+      present, correctly worded, 4 times, identically in both. **This
+      is a genuine new occurrence of the same prose-reliability failure
+      as Bugs 1 and 3, not a sync bug.**
+- [x] **Bug 3 (reasoning-vs-output divergence) — searched the FULL
+      session transcript file (7.6MB, not just current context) for
+      the exact quoted phrase ("I should NOT ask the ticket question").
+      Found it in exactly two places: the bug report itself and the
+      user's own follow-up message quoting it back — no earlier
+      occurrence with an actual reasoning trace + response pair exists
+      anywhere in this session.** Reported this plainly rather than
+      fabricating or reconstructing a transcript from the description.
+      Confirmed by the user: this is real evidence from elsewhere (a
+      Kiro chat transcript, not this session) that hasn't been pasted
+      yet. **Stays blocked, by explicit agreement, until the user
+      pastes it — not guessed at.**
+- [x] **Bug 4 (Jira-unavailable fallback) — instruction gap confirmed
+      real via direct file inspection of `HEAD`'s shipped text** (no
+      live transcript exists for this one; user confirmed this and
+      explicitly approved proceeding on file-evidence alone). All three
+      fallback sites (PRIORITY CHECK, CASE A1, CASE C1) lumped "network
+      error, timeout, ambiguous response" into one bucket with no
+      separate case for "the tool itself is structurally unavailable."
+- [x] **Proposal written:** `docs/jira-unavailable-hard-stop-
+      proposal.md` — option 1 (wording split: structural unavailability
+      of getAccessibleAtlassianResources itself → HARD STOP; a single
+      lookup's own transient failure → unchanged) + option 2 (new
+      `Kiro-Jira-Validated` trailer, same true/false/n/a architecture as
+      `Kiro-Confirmed`, honestly caveated as agent-written and NOT
+      command-hook-derived — no MCP visibility exists at that layer).
+- [x] **Built, 4 files:** `aidlc-ask-for-ticket-if-missing.json` (3
+      fallback sites split, 3 baseline-write commands extended with
+      `jira_validation_status`), `.githooks/pre-commit` (reads the new
+      field), `.githooks/commit-msg` (maps
+      validated/skipped_transient/other → true/false/n/a, emits the
+      trailer), `scripts/calculate-pr-credits.sh` (presence-sentinel +
+      per-ticket "any false wins" aggregation, same pattern as
+      `Kiro-Confirmed`).
+- [x] **A real self-inflicted bug caught and fixed mid-build, not
+      shipped blind:** an early batch text-replacement script (fixing
+      one JSON-escaping mistake in a freshly-inserted quote) matched 12
+      occurrences of a 3-backslash+quote pattern, not the 2 intended —
+      10 were PRE-EXISTING, correct escapings of embedded shell-command
+      quotes elsewhere in the same file (e.g. inside the `sqlite3`
+      python one-liners). Caught by decoding and diffing against `HEAD`
+      before proceeding further, not by inspection alone; reverted to
+      `HEAD`, redid the 2 intended edits with precise, verified
+      backslash counts this time, confirmed via `content.count(bad3)`
+      still reads 10 (unchanged) afterward.
+- [x] **Live-tested, 5/5, real commits in an isolated scratch repo,
+      real trailers checked after each:** `jira_validation_status`
+      of `validated` → `Kiro-Jira-Validated: true`;
+      `skipped_transient` → `false`; `none` → `n/a`; field missing
+      entirely (old-style baseline) → `n/a`; two episodes on one
+      ticket, one true one false → `calculate-pr-credits.sh` correctly
+      surfaces `JIRA VALIDATION SKIPPED`, the false wins, not averaged
+      or hidden — same aggregation contract as `Kiro-Confirmed`.
+- **Honest limit, stated plainly, not glossed over: only the plumbing
+  is tested. Whether the new HARD STOP wording actually fires on a
+  real structural-unavailability turn is untestable from this
+  session — no way to drive a real Kiro chat turn — flagged as
+  "awaiting a real live transcript," not claimed passing.**
+- **Real repo state confirmed unaffected throughout — all testing in
+  an isolated scratch repo under `/tmp`. Approved to commit.**

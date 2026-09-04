@@ -94,6 +94,7 @@ for sha in $SHAS; do
   CREDITS=$(echo "$MSG" | grep -oP '^Kiro-Credits: \K.*' || true)
   ELAPSED=$(echo "$MSG" | grep -oP '^Kiro-Elapsed-Minutes: \K.*' || true)
   CONFIRMED=$(echo "$MSG" | grep -oP '^Kiro-Confirmed: \K.*' || true)
+  JIRA_VALIDATED=$(echo "$MSG" | grep -oP '^Kiro-Jira-Validated: \K.*' || true)
   if [ -z "$TICKET" ] || [ "$CREDITS" = "n/a" ] || [ -z "$CREDITS" ]; then
     continue
   fi
@@ -119,7 +120,17 @@ for sha in $SHAS; do
   else
     CONFIRMED_PRESENT="1"
   fi
-  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT|$CONFIRMED_PRESENT|$CONFIRMED" >> "$TMPFILE"
+  # docs/jira-unavailable-hard-stop-proposal.md, added 2026-09-04 (Bug 4)
+  # — same presence-sentinel pattern as CONFIRMED_PRESENT just above,
+  # reused rather than reinvented. Kiro-Jira-Validated is a real boolean
+  # (or 'n/a'), so the same false-vs-missing distinction matters here too.
+  if [ -z "$JIRA_VALIDATED" ] || [ "$JIRA_VALIDATED" = "n/a" ]; then
+    JIRA_VALIDATED_PRESENT="0"
+    JIRA_VALIDATED="n/a"
+  else
+    JIRA_VALIDATED_PRESENT="1"
+  fi
+  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT|$CONFIRMED_PRESENT|$CONFIRMED|$JIRA_VALIDATED_PRESENT|$JIRA_VALIDATED" >> "$TMPFILE"
 done
 
 if [ ! -s "$TMPFILE" ]; then
@@ -156,6 +167,14 @@ awk -F'|' '
     if ($7 == "false") confirmedFalse[$1] = 1
     if ($7 == "true") confirmedTrue[$1] = 1
   }
+  # docs/jira-unavailable-hard-stop-proposal.md, added 2026-09-04 (Bug 4)
+  # — same per-ticket "any false wins" aggregation as Kiro-Confirmed just
+  # above, same reasoning: a hidden un-validated episode is worse than a
+  # validated one looking unremarkable.
+  if ($8+0 == 1) {
+    if ($9 == "false") jiraValidatedFalse[$1] = 1
+    if ($9 == "true") jiraValidatedTrue[$1] = 1
+  }
 }
 END {
   for (k in maxCredits) {
@@ -179,6 +198,13 @@ END {
       line = line ", confirmed"
     } else {
       line = line ", confirmed: n/a"
+    }
+    if (t in jiraValidatedFalse) {
+      line = line ", JIRA VALIDATION SKIPPED (transient failure — ticket existence not actually confirmed for at least one episode)"
+    } else if (t in jiraValidatedTrue) {
+      line = line ", jira-validated"
+    } else {
+      line = line ", jira-validated: n/a"
     }
     print line
   }

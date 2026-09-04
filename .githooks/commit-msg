@@ -26,7 +26,7 @@ DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
 KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
 KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
 KIRO_EPISODE_STARTED_AT="" KIRO_ELAPSED_MINUTES=""
-KIRO_ASK_CONFIRMED_GAP_SECONDS="" KIRO_ASK_CONFIRMED=""
+KIRO_ASK_CONFIRMED_GAP_SECONDS="" KIRO_ASK_CONFIRMED="" KIRO_JIRA_VALIDATION_STATUS=""
 # shellcheck disable=SC1090
 [ -f "$DATA_FILE" ] && . "$DATA_FILE"
 rm -f "$DATA_FILE"
@@ -58,6 +58,19 @@ ELAPSED="${KIRO_ELAPSED_MINUTES:-n/a}"
 # genuinely empty — no extra "null" string check needed.
 ASK_GAP="${KIRO_ASK_CONFIRMED_GAP_SECONDS:-n/a}"
 ASK_CONFIRMED="${KIRO_ASK_CONFIRMED:-n/a}"
+# docs/jira-unavailable-hard-stop-proposal.md, added 2026-09-04 (Bug 4) —
+# jira_validation_status is agent-written prose (see that proposal's
+# honest limitation note: unlike Kiro-Confirmed, there's no command-hook-
+# visible signal for "was Jira actually reachable"), so map its three
+# possible string values onto the same true/false/n/a convention
+# Kiro-Confirmed already uses, rather than inventing new trailer wording.
+# Any value that isn't exactly one of the two known strings (missing,
+# 'none', or an old baseline predating this field) falls through to n/a.
+case "$KIRO_JIRA_VALIDATION_STATUS" in
+  validated) JIRA_VALIDATED="true" ;;
+  skipped_transient) JIRA_VALIDATED="false" ;;
+  *) JIRA_VALIDATED="n/a" ;;
+esac
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"
@@ -69,3 +82,4 @@ echo "Kiro-Episode-Started: $EPISODE_STARTED" >> "$1"
 echo "Kiro-Elapsed-Minutes: $ELAPSED" >> "$1"
 echo "Kiro-Confirmed-Gap-Seconds: $ASK_GAP" >> "$1"
 echo "Kiro-Confirmed: $ASK_CONFIRMED" >> "$1"
+echo "Kiro-Jira-Validated: $JIRA_VALIDATED" >> "$1"
