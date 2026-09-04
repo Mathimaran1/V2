@@ -1,8 +1,14 @@
 # Bug 3 — reasoning/output divergence: root-cause investigation and proposal
 
 ## Status
-Investigation and proposal only. **No fix built.** Awaiting review before
-implementation, per explicit instruction.
+Investigation and proposal only, as originally written. **Update
+(2026-09-04, same day): Part A was approved, built, and committed as
+`a7b7cbd`, documented inline as unverified. Part B was clarified with
+two concrete real examples of what it would miss, then deliberately
+declined — not built, a scope decision, logged in TODO.md.** This
+section's opening line ("No fix built") was accurate when written and
+is stale now for Part A specifically; left as-is below and corrected
+here, caught during a later full-project consistency sweep.
 
 ## Evidence — full reconstructed context
 

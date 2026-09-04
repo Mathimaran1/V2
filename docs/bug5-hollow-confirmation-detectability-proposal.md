@@ -1,6 +1,16 @@
 # Bug 5 — hollow-confirmation detectability
 
 ## Status
+**Update (2026-09-04): built, live-tested 10/10 (all three triggers plus
+the accepted-trade-off case) in an isolated scratch repo, plus a direct
+replay confirming trigger B catches the real incident, committed as
+`afb677d`. See TODO.md for the full test log. The line below ("Proposed,
+not built") describes this proposal's state at the time it was written —
+left as historical record, corrected here rather than deleted, since this
+opening line was found stale during a later full-project consistency
+sweep and should not mislead a future reader into thinking this is still
+pending.**
+
 Proposed, not built. Named and numbered on its own — explicitly not folded
 into Bug 1 (ask-skip) — per the user's direction: this is a distinct and
 more severe failure mode, not a variant of a known one.

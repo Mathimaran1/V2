@@ -6,6 +6,13 @@ trailer, after the user confirmed the real reproduction was a first-call
 guess, not a reuse-turn — ruling out the cache-and-inject mitigation
 considered earlier.
 
+**Update (2026-09-04, same day):** built, live-tested 5/5 in an isolated
+scratch repo, committed as `5ff9232` (originally hand-typed trailer lines
+caused a real duplicate-trailer bug, fixed via `git commit --amend`,
+final clean commit `0cedf55`). See TODO.md for the full test log. This
+line was stale ("Approved to build") for a while after landing — caught
+during a later full-project consistency sweep, not by design.
+
 ## Evidence
 Root cause already conclusively established (see TODO.md, 2026-09-04): the
 HCM-ALCS-BE-AIDLC-TEST reproduction is NOT a stale-copy/deployment issue —

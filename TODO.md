@@ -4548,3 +4548,54 @@ else happens to it.
   prose-only fix. No detectability mechanism added for the residual
   reasoning-output divergence risk — that gap is accepted, not
   covered, a deliberate choice, not an unaddressed one.
+
+## 2026-09-04 (same day, follow-up): fresh full-system sweep — no new bugs found, real documentation drift found and fixed
+- [x] **All 18 consolidated regression cases re-run against current
+      (post-a7b7cbd) files, fresh scratch repo, source files diffed
+      byte-identical against the real repo first — 18/18 pass, zero
+      regressions.** Bug 3 Part A confirmed to have zero deterministic
+      regression surface by construction: `aidlc-ask-for-ticket-if-
+      missing.json` is never read by any script or git hook (grep
+      confirmed every reference to its filename anywhere in
+      `.githooks/`/`scripts/` is a comment, not a read) — only the live
+      Kiro agent reads it, so no test in the deterministic suite could
+      regress from this change, and none did.
+- [x] **Full git-history corruption sweep, both named patterns:**
+      trailer-parsing collision — swept all 78 commits (up from ~70 at
+      the last audit, all new ones clean), still exactly one instance
+      (`fb8c2f0`, unchanged, not rewritten). JSON-escaping pattern —
+      validated all 38 historical blobs across every `.kiro/**/*.json`
+      path ever tracked (6 distinct paths): zero invalid JSON, zero
+      semantic corruption (checked that every historical version's
+      embedded `python3 -c` SQL command decodes to the correct,
+      un-corrupted text, not just "is valid JSON").
+- [x] **Broader corruption search, item 2's third bullet:** every
+      historical version of every `.sh` file and `.githooks/*` file in
+      the entire history passes `bash -n` (zero syntax errors, ever
+      committed); swept all commits for large-deletion-relative-to-
+      insertion outliers (a proxy for accidental truncation) — zero
+      flagged.
+- [x] **Bug 3 pattern search re-run, item 3: zero new session activity
+      since the last search** (same 101 total Reasoning→Say pairs,
+      same single flagged instance) — confirmed by pair-count before
+      re-running the full heuristic, not assumed from silence.
+- [x] **Real documentation drift found and fixed — the actual finding
+      of this sweep:** all four recent proposal docs
+      (`cloudid-guess-detectability-proposal.md`,
+      `jira-unavailable-hard-stop-proposal.md`,
+      `bug5-hollow-confirmation-detectability-proposal.md`,
+      `bug3-reasoning-output-divergence-proposal.md`) still had their
+      opening `## Status` line reading "approved to build" / "proposed,
+      not built" — none had been updated to reflect that each was
+      subsequently built, live-tested, and committed for real. Fixed
+      with a dated "Update" addendum in each, the original line left
+      intact as historical record rather than deleted. Cross-checked
+      `docs/manual-test-checklist.md` §10/11 against the real trailer
+      names (`.githooks/commit-msg`) and the real `hook_status=` log
+      lines (`ticket-gate-fastpath.sh`) — all correct, no drift found
+      there.
+- **Honest conclusion: no new bug or corruption instance found in this
+  sweep. The one real finding was documentation drift (proposal docs
+  not updated after their own fixes landed), now corrected. Nothing
+  manufactured to have something to report — this is a clean result,
+  reported as such.**

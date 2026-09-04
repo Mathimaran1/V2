@@ -9,6 +9,14 @@ doesn't exist. Documented here anyway, matching this project's standing
 practice of a written design for every non-trivial fix — approval already
 given, this is the record, not a request for it.
 
+**Update (2026-09-04, same day):** built, live-tested 5/5 in an isolated
+scratch repo (`validated`→true, `skipped_transient`→false, `none`/missing
+→n/a, and the "any false wins" aggregation case), committed as `bc39d57`
+after a real self-inflicted JSON-escaping bug was caught and fixed
+mid-build. See TODO.md for the full test log. This line was stale
+("Approved to build directly") after landing — caught during a later
+full-project consistency sweep.
+
 ## Evidence (real, from `HEAD`'s shipped `aidlc-ask-for-ticket-if-missing.json`)
 The same fallback sentence appears three times — PRIORITY CHECK, CASE A1,
 CASE C1 — each lumping every non-"clear not-found" MCP outcome into one
