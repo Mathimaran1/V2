@@ -250,6 +250,15 @@ ASK_CONFIRMED=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r 'if .ask_confi
 # no falsy string value is a valid jira_validation_status.
 JIRA_VALIDATION_STATUS=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r '.jira_validation_status // empty')
 
+# docs/cloudid-guess-detectability-proposal.md, added 2026-09-04 (Bug 2)
+# — same shape as JIRA_VALIDATION_STATUS just above, but this one IS a
+# real boolean in current-ticket.json (True/False, written by the
+# bundled python baseline-write command), so it needs the same explicit
+# null-check ASK_CONFIRMED already uses, not a plain `// empty` (which
+# would collapse a real `false` the same way the jq bug caught earlier
+# this project did for ask_confirmed).
+CLOUD_ID_CONFIRMED=$(cat .kiro/current-ticket.json 2>/dev/null | jq -r 'if .cloud_id_confirmed == null then "" else (.cloud_id_confirmed | tostring) end')
+
 ELAPSED_MINUTES="null"
 if [ -n "$EPISODE_STARTED_AT" ]; then
   EPISODE_START_EPOCH=$(date -u -d "$EPISODE_STARTED_AT" +%s 2>/dev/null)
@@ -378,6 +387,7 @@ KIRO_ELAPSED_MINUTES="$ELAPSED_MINUTES"
 KIRO_ASK_CONFIRMED_GAP_SECONDS="$ASK_CONFIRMED_GAP_SECONDS"
 KIRO_ASK_CONFIRMED="$ASK_CONFIRMED"
 KIRO_JIRA_VALIDATION_STATUS="$JIRA_VALIDATION_STATUS"
+KIRO_CLOUD_ID_CONFIRMED="$CLOUD_ID_CONFIRMED"
 INNER_EOF
 
 # 4b. Optional debug convenience copy — ONE file per ticket, overwritten

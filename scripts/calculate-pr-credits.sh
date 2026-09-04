@@ -95,6 +95,7 @@ for sha in $SHAS; do
   ELAPSED=$(echo "$MSG" | grep -oP '^Kiro-Elapsed-Minutes: \K.*' || true)
   CONFIRMED=$(echo "$MSG" | grep -oP '^Kiro-Confirmed: \K.*' || true)
   JIRA_VALIDATED=$(echo "$MSG" | grep -oP '^Kiro-Jira-Validated: \K.*' || true)
+  CLOUD_ID_CONFIRMED=$(echo "$MSG" | grep -oP '^Kiro-CloudId-Confirmed: \K.*' || true)
   if [ -z "$TICKET" ] || [ "$CREDITS" = "n/a" ] || [ -z "$CREDITS" ]; then
     continue
   fi
@@ -130,7 +131,15 @@ for sha in $SHAS; do
   else
     JIRA_VALIDATED_PRESENT="1"
   fi
-  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT|$CONFIRMED_PRESENT|$CONFIRMED|$JIRA_VALIDATED_PRESENT|$JIRA_VALIDATED" >> "$TMPFILE"
+  # docs/cloudid-guess-detectability-proposal.md, added 2026-09-04 (Bug 2)
+  # — same presence-sentinel pattern, third reuse.
+  if [ -z "$CLOUD_ID_CONFIRMED" ] || [ "$CLOUD_ID_CONFIRMED" = "n/a" ]; then
+    CLOUD_ID_CONFIRMED_PRESENT="0"
+    CLOUD_ID_CONFIRMED="n/a"
+  else
+    CLOUD_ID_CONFIRMED_PRESENT="1"
+  fi
+  echo "$TICKET|$EPISODE|$CREDITS|$ELAPSED|$ELAPSED_PRESENT|$CONFIRMED_PRESENT|$CONFIRMED|$JIRA_VALIDATED_PRESENT|$JIRA_VALIDATED|$CLOUD_ID_CONFIRMED_PRESENT|$CLOUD_ID_CONFIRMED" >> "$TMPFILE"
 done
 
 if [ ! -s "$TMPFILE" ]; then
@@ -175,6 +184,12 @@ awk -F'|' '
     if ($9 == "false") jiraValidatedFalse[$1] = 1
     if ($9 == "true") jiraValidatedTrue[$1] = 1
   }
+  # docs/cloudid-guess-detectability-proposal.md, added 2026-09-04
+  # (Bug 2) — same per-ticket "any false wins" aggregation, third reuse.
+  if ($10+0 == 1) {
+    if ($11 == "false") cloudIdConfirmedFalse[$1] = 1
+    if ($11 == "true") cloudIdConfirmedTrue[$1] = 1
+  }
 }
 END {
   for (k in maxCredits) {
@@ -205,6 +220,13 @@ END {
       line = line ", jira-validated"
     } else {
       line = line ", jira-validated: n/a"
+    }
+    if (t in cloudIdConfirmedFalse) {
+      line = line ", CLOUD ID NOT CONFIRMED (validated without ever calling getAccessibleAtlassianResources for at least one episode — possible guessed cloudId)"
+    } else if (t in cloudIdConfirmedTrue) {
+      line = line ", cloud-id-confirmed"
+    } else {
+      line = line ", cloud-id-confirmed: n/a"
     }
     print line
   }

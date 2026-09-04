@@ -27,6 +27,7 @@ KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
 KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
 KIRO_EPISODE_STARTED_AT="" KIRO_ELAPSED_MINUTES=""
 KIRO_ASK_CONFIRMED_GAP_SECONDS="" KIRO_ASK_CONFIRMED="" KIRO_JIRA_VALIDATION_STATUS=""
+KIRO_CLOUD_ID_CONFIRMED=""
 # shellcheck disable=SC1090
 [ -f "$DATA_FILE" ] && . "$DATA_FILE"
 rm -f "$DATA_FILE"
@@ -71,6 +72,11 @@ case "$KIRO_JIRA_VALIDATION_STATUS" in
   skipped_transient) JIRA_VALIDATED="false" ;;
   *) JIRA_VALIDATED="n/a" ;;
 esac
+# docs/cloudid-guess-detectability-proposal.md, added 2026-09-04 (Bug 2)
+# — already arrives as "true"/"false"/"" from pre-commit's explicit
+# jq null-check (same convention as ASK_CONFIRMED), so a plain fallback
+# default is enough here, no case-mapping needed.
+CLOUD_ID_CONFIRMED="${KIRO_CLOUD_ID_CONFIRMED:-n/a}"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"
@@ -83,3 +89,4 @@ echo "Kiro-Elapsed-Minutes: $ELAPSED" >> "$1"
 echo "Kiro-Confirmed-Gap-Seconds: $ASK_GAP" >> "$1"
 echo "Kiro-Confirmed: $ASK_CONFIRMED" >> "$1"
 echo "Kiro-Jira-Validated: $JIRA_VALIDATED" >> "$1"
+echo "Kiro-CloudId-Confirmed: $CLOUD_ID_CONFIRMED" >> "$1"

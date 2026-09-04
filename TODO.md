@@ -3962,3 +3962,77 @@ tracked, does not reliably trigger CASE C2's switch question.
   "awaiting a real live transcript," not claimed passing.**
 - **Real repo state confirmed unaffected throughout — all testing in
   an isolated scratch repo under `/tmp`. Approved to commit.**
+- [x] **Bug 4's real commit (`fde5f56`) caught its own real defect
+      immediately after landing, not left unnoticed:** the commit
+      message text included hand-typed `Kiro-*` trailer-shaped lines
+      (a habit slip, not present in any earlier commit this session) —
+      `commit-msg` then appended its own REAL trailer block after
+      them, producing two `Kiro-Ticket`/`Kiro-Credits`/etc. blocks in
+      one commit. Confirmed this actually broke
+      `calculate-pr-credits.sh`'s grep-based parsing (it read both
+      blocks concatenated, producing garbage output with fabricated
+      "tickets" like `2.9600` and `53.80`). Caught by testing the
+      script against the real commit immediately after committing, not
+      assumed fine. Fixed via `git commit --amend` with a message
+      containing zero hand-typed `Kiro-*` lines, letting the real hook
+      stamp exactly one clean block (`bc39d57`) — re-verified
+      `calculate-pr-credits.sh` reads it correctly. Lesson: never type
+      `Kiro-*`-shaped lines into a commit message by hand — the hook
+      always appends its own, and a human/agent-typed one is
+      indistinguishable to a grep-based parser from the real thing.
+
+## 2026-09-04 (same day, follow-up): Bug 2 fix built and tested — Kiro-CloudId-Confirmed, same architecture as Kiro-Jira-Validated
+- [x] **Proposal written:** `docs/cloudid-guess-detectability-
+      proposal.md` — after the user confirmed the real
+      HCM-ALCS-BE-AIDLC-TEST reproduction was a first-call guess, not a
+      reuse-turn (ruling out the cache-and-inject idea considered
+      earlier), the only buildable option left is detectability, same
+      shape as Bug 4's `Kiro-Jira-Validated`: a `cloud_id_confirmed`
+      boolean added to the same bundled baseline-write command (`true`
+      if `getAccessibleAtlassianResources` was actually called and used,
+      `false` if the agent proceeded without it), surfaced as
+      `Kiro-CloudId-Confirmed` (true/false/n/a), same aggregation
+      contract as every other trailer of this shape.
+- [x] **Built, 4 files:** `aidlc-ask-for-ticket-if-missing.json`
+      (`cloud_id_confirmed` added to all 3 baseline-write commands, with
+      substitution instructions), `.githooks/pre-commit` (reads it with
+      the same explicit null-check `ASK_CONFIRMED` already needed —
+      it's a real boolean, so a plain `// empty` would collapse a real
+      `false`), `.githooks/commit-msg` (emits the trailer),
+      `scripts/calculate-pr-credits.sh` (third reuse of the
+      presence-sentinel + "any false wins" pattern).
+- [x] **Live-tested, 5/5, real commits in an isolated scratch repo:**
+      `cloud_id_confirmed=True` → `Kiro-CloudId-Confirmed: true`;
+      `False` → `false`; field missing → `n/a`; two episodes on one
+      ticket, one true one false → `calculate-pr-credits.sh` correctly
+      surfaces `CLOUD ID NOT CONFIRMED`, the false wins.
+- [x] **This commit's message itself checked for the exact
+      hand-typed-trailer mistake found above before committing** — no
+      `Kiro-*`-shaped lines in the message body this time, real hook
+      trailers only.
+- **Same honest limit as Bug 4: only the plumbing is tested. Whether the
+  agent actually sets `cloud_id_confirmed` correctly on a real guess is
+  untestable from this session. Real repo state confirmed unaffected —
+  all testing in an isolated scratch repo under `/tmp`. Approved to
+  commit.**
+- [x] **A second, live instance of Bug 4's commit's own parsing-
+      collision mistake, caught the same way — by testing the real
+      commit against `calculate-pr-credits.sh` immediately after
+      committing, not assumed fine.** This time nothing was hand-typed
+      as a trailer; ordinary prose in the commit body wrapped so that
+      a line happened to start with `Kiro-Jira-Validated: ` — the
+      script's `grep -oP '^Kiro-Jira-Validated: \K.*'` matched it
+      exactly like a real trailer, splitting `JIRA_VALIDATED` across
+      two values and corrupting the aggregate output with a phantom
+      `n/a: 0.0000 credits...` ticket line. Fixed by rewording the
+      commit body (verified line-by-line against all 12 known trailer
+      names before committing) and amending — re-verified clean.
+      **Named as a real, still-open script fragility, not just
+      patched around this once:** `calculate-pr-credits.sh` greps the
+      ENTIRE commit message for trailer-shaped lines, not only the
+      real trailing trailer block `commit-msg` actually writes — any
+      commit body prose that happens to wrap the same way will hit
+      this again. Not fixed here (would need parsing only the message's
+      final trailer block, e.g. by locating the blank line before
+      `Kiro-Ticket:` and only grepping after it) — flagged for a
+      future pass, not silently left undocumented.
