@@ -25,9 +25,7 @@ GIT_DIR=$(git rev-parse --git-dir)
 DATA_FILE="$GIT_DIR/KIRO_COMMIT_DATA"
 KIRO_TICKET_ID="" KIRO_TICKET_SOURCE="" KIRO_SESSION_ID=""
 KIRO_CREDITS_DELTA="" KIRO_CREDIT_CONFIDENCE="" KIRO_EPISODE_ID=""
-KIRO_EPISODE_STARTED_AT="" KIRO_ELAPSED_MINUTES=""
-KIRO_ASK_CONFIRMED_GAP_SECONDS="" KIRO_ASK_CONFIRMED="" KIRO_JIRA_VALIDATION_STATUS=""
-KIRO_CLOUD_ID_CONFIRMED=""
+KIRO_JIRA_VALIDATION_STATUS=""
 # shellcheck disable=SC1090
 [ -f "$DATA_FILE" ] && . "$DATA_FILE"
 rm -f "$DATA_FILE"
@@ -42,41 +40,19 @@ CREDITS="${KIRO_CREDITS_DELTA:-n/a}"
 CONFIDENCE="${KIRO_CREDIT_CONFIDENCE:-n/a}"
 SESSION_ID="${KIRO_SESSION_ID:-none}"
 SOURCE="${KIRO_TICKET_SOURCE:-n/a}"
-# Time tracking, added 2026-08-28 — same defaulting pattern as credits:
-# EPISODE_STARTED is the fixed start value (falls back to "none", same
-# convention as EPISODE above, when no baseline has ever been set);
-# ELAPSED is the recalculated-per-commit current value (falls back to
-# "n/a", same convention as CREDITS, including the same "null" literal
-# pre-commit writes when it couldn't compute one — e.g. an old
-# current-ticket.json with no episode_started_at field at all).
-EPISODE_STARTED="${KIRO_EPISODE_STARTED_AT:-none}"
-ELAPSED="${KIRO_ELAPSED_MINUTES:-n/a}"
-[ "$ELAPSED" = "null" ] && ELAPSED="n/a"
-# docs/kiro-confirmed-persistent-signal-proposal.md, added 2026-09-02 —
-# same fallback pattern as CREDITS/ELAPSED above. Unlike those two,
-# pre-commit hands these across via a real jq `// empty` read (not a
-# hand-written "null" literal), so an absent value arrives here already
-# genuinely empty — no extra "null" string check needed.
-ASK_GAP="${KIRO_ASK_CONFIRMED_GAP_SECONDS:-n/a}"
-ASK_CONFIRMED="${KIRO_ASK_CONFIRMED:-n/a}"
 # docs/jira-unavailable-hard-stop-proposal.md, added 2026-09-04 (Bug 4) —
 # jira_validation_status is agent-written prose (see that proposal's
-# honest limitation note: unlike Kiro-Confirmed, there's no command-hook-
-# visible signal for "was Jira actually reachable"), so map its three
-# possible string values onto the same true/false/n/a convention
-# Kiro-Confirmed already uses, rather than inventing new trailer wording.
-# Any value that isn't exactly one of the two known strings (missing,
-# 'none', or an old baseline predating this field) falls through to n/a.
+# honest limitation note: there's no command-hook-visible signal for
+# "was Jira actually reachable"), so map its three possible string
+# values onto a true/false/n/a convention, rather than inventing new
+# trailer wording. Any value that isn't exactly one of the two known
+# strings (missing, 'none', or an old baseline predating this field)
+# falls through to n/a.
 case "$KIRO_JIRA_VALIDATION_STATUS" in
   validated) JIRA_VALIDATED="true" ;;
   skipped_transient) JIRA_VALIDATED="false" ;;
   *) JIRA_VALIDATED="n/a" ;;
 esac
-# docs/cloudid-guess-detectability-proposal.md, added 2026-09-04 (Bug 2)
-# — already arrives as "true"/"false"/"" from pre-commit's explicit
-# jq null-check (same convention as ASK_CONFIRMED), so a plain fallback
-# default is enough here, no case-mapping needed.
-CLOUD_ID_CONFIRMED="${KIRO_CLOUD_ID_CONFIRMED:-n/a}"
 echo "" >> "$1"
 echo "Kiro-Ticket: $TICKET" >> "$1"
 echo "Kiro-Episode: $EPISODE" >> "$1"
@@ -84,9 +60,4 @@ echo "Kiro-Credits: $CREDITS" >> "$1"
 echo "Kiro-Confidence: $CONFIDENCE" >> "$1"
 echo "Kiro-Session: $SESSION_ID" >> "$1"
 echo "Kiro-Source: $SOURCE" >> "$1"
-echo "Kiro-Episode-Started: $EPISODE_STARTED" >> "$1"
-echo "Kiro-Elapsed-Minutes: $ELAPSED" >> "$1"
-echo "Kiro-Confirmed-Gap-Seconds: $ASK_GAP" >> "$1"
-echo "Kiro-Confirmed: $ASK_CONFIRMED" >> "$1"
 echo "Kiro-Jira-Validated: $JIRA_VALIDATED" >> "$1"
-echo "Kiro-CloudId-Confirmed: $CLOUD_ID_CONFIRMED" >> "$1"
