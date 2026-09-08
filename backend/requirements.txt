@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+boto3
+python-dotenv
+httpx
+duckdb
+pandas
+pyarrow
