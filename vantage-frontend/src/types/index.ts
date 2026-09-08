@@ -42,7 +42,55 @@ export interface IssueType {
 }
 
 // =====================================================
+// Real ticket summary (from backend GET /api/tickets[/:id] — DuckDB
+// over local CodeCommit-derived Parquet cache, NO Jira fields at all;
+// Jira isn't wired yet, see Step 2 of the integration plan)
+// =====================================================
+
+export interface TicketSummary {
+  ticketId: string;
+  commitCount: number;
+  prCount: number;
+  creditsUsed: number;
+  jiraValidated: 'true' | 'false' | 'n/a';
+  // Raw AWS CodeCommit author-date format ("<epoch> <+HHMM>"), not ISO
+  // 8601 — parse with services/utils.ts's parseTimestamp, not `new Date()`
+  // directly. Null when the ticket has zero real commits.
+  lastCommitAt: string | null;
+}
+
+// =====================================================
+// Real commit shape (from backend GET /api/commits/:id — exactly
+// services/codecommit_service.py's _normalize_commit() keys, confirmed
+// against real API output; NOT the same shape as the `Commit` type
+// below, which is a richer GitHub-style shape used only by still-mock
+// pages). `timestamp` is CodeCommit's raw author-date format, same
+// caveat as TicketSummary.lastCommitAt above.
+// =====================================================
+
+export interface CommitRecord {
+  hash: string;
+  fullHash: string;
+  message: string;
+  subject: string;
+  author: string;
+  authorEmail: string;
+  timestamp: string;
+  kiroTicket: string;
+  kiroEpisode: string | null;
+  kiroCredits: number | null;
+  kiroConfidence: 'high' | 'low' | null;
+  kiroSession: string | null;
+  kiroSource: string | null;
+  kiroJiraValidated: boolean | null;
+}
+
+// =====================================================
 // Commit types (from real git trailers via CodeCommit)
+// NOTE: this richer GitHub-style shape (branch, additions/deletions,
+// filesChanged, secretScanStatus, structured Person author) is NOT what
+// the real backend returns — see CommitRecord above for that. Still
+// used by mockData.ts's still-mock pages (DeveloperDetail).
 // =====================================================
 
 export interface Commit {

@@ -10,10 +10,11 @@ load_dotenv()  # must run before any service module reads os.environ
 
 from fastapi import FastAPI
 
-from routes import commits, pullrequests, refresh
+from routes import commits, pullrequests, refresh, tickets
 
 app = FastAPI(title="Vantage backend")
 
+app.include_router(tickets.router)
 app.include_router(commits.router)
 app.include_router(pullrequests.router)
 app.include_router(refresh.router)

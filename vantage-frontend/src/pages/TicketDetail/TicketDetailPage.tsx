@@ -1,8 +1,8 @@
 import { ArrowLeft, Info } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { computeCreditsUsed } from '@/services/api';
-import { getMockCommits, getMockPullRequests, getMockSonarQube, getMockTicketDetail } from '@/services/mockData';
+import { computeCreditsUsed, fetchCommits, fetchPullRequests, fetchTicketSummary } from '@/services/api';
+import type { CommitRecord, PullRequest, TicketSummary } from '@/types';
 import CommitsPanel from './panels/CommitsPanel';
 import JiraPanel from './panels/JiraPanel';
 import PullRequestsPanel from './panels/PullRequestsPanel';
@@ -17,24 +17,92 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'sonarqube', label: 'SonarQube' },
 ];
 
+// SonarQube isn't wired yet (Step 3 of the integration plan — blocked on
+// a real server URL + token from the user). This is an honest
+// "not connected" SonarQubeData, not fabricated metrics — SonarQubePanel
+// already renders its own EmptyState whenever connected is false.
+const SONARQUBE_NOT_CONNECTED = {
+  connected: false as const,
+  qualityGate: null,
+  lastScan: null,
+  metrics: null,
+  issues: [],
+  trend: null,
+};
+
+type LoadState = 'loading' | 'not-found' | 'error' | 'ready';
+
 export default function TicketDetailPage() {
   const { ticketId } = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabId>('jira');
 
-  const ticket = useMemo(() => getMockTicketDetail(ticketId ?? ''), [ticketId]);
-  const commits = useMemo(() => getMockCommits(ticketId ?? ''), [ticketId]);
-  const prs = useMemo(() => getMockPullRequests(ticketId ?? ''), [ticketId]);
-  const sonarqube = useMemo(() => getMockSonarQube(ticketId ?? ''), [ticketId]);
+  const [loadState, setLoadState] = useState<LoadState>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [ticket, setTicket] = useState<TicketSummary | null>(null);
+  const [commits, setCommits] = useState<CommitRecord[]>([]);
+  const [prs, setPrs] = useState<PullRequest[]>([]);
+
+  useEffect(() => {
+    if (!ticketId) return;
+    let cancelled = false;
+
+    setLoadState('loading');
+    (async () => {
+      try {
+        const [ticketRes, commitsRes, prsRes] = await Promise.all([
+          fetchTicketSummary(ticketId),
+          fetchCommits(ticketId),
+          fetchPullRequests(ticketId),
+        ]);
+        if (cancelled) return;
+        setTicket(ticketRes);
+        setCommits(commitsRes);
+        setPrs(prsRes);
+        setLoadState('ready');
+      } catch (err) {
+        if (cancelled) return;
+        // GET /api/tickets/:id returns a real 404 for an untracked ticket
+        // (see routes/tickets.py) — treat that as "not found", not a
+        // generic error.
+        if (err instanceof Error && err.message.includes('404')) {
+          setLoadState('not-found');
+        } else {
+          setErrorMessage(err instanceof Error ? err.message : String(err));
+          setLoadState('error');
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [ticketId]);
 
   const creditsUsed = useMemo(() => computeCreditsUsed(commits), [commits]);
-  const qualityGateResult = sonarqube.qualityGate;
+  const qualityGateResult = SONARQUBE_NOT_CONNECTED.qualityGate;
 
-  if (!ticket) {
+  if (loadState === 'loading') {
     return (
       <div className="page-ticket-detail">
         <button className="back-link" onClick={() => navigate('/')}>← Back to Overview</button>
-        <p>Ticket not found.</p>
+        <p>Loading real ticket data…</p>
+      </div>
+    );
+  }
+
+  if (loadState === 'not-found') {
+    return (
+      <div className="page-ticket-detail">
+        <button className="back-link" onClick={() => navigate('/')}>← Back to Overview</button>
+        <p>Ticket {ticketId} isn't tracked yet — run scripts/refresh_data.py --ticket {ticketId} first.</p>
+      </div>
+    );
+  }
+
+  if (loadState === 'error' || !ticket) {
+    return (
+      <div className="page-ticket-detail">
+        <button className="back-link" onClick={() => navigate('/')}>← Back to Overview</button>
+        <p>Failed to load {ticketId}: {errorMessage}</p>
       </div>
     );
   }
@@ -48,8 +116,13 @@ export default function TicketDetailPage() {
       </button>
 
       <header className="ticket-header">
-        <span className="ticket-id">{ticket.key}</span>
-        <h1 className="ticket-title">{ticket.summary}</h1>
+        <span className="ticket-id">{ticket.ticketId}</span>
+        <h1 className="ticket-title">
+          Jira summary unavailable
+          <span className="stat-info-icon" title="Jira isn't connected yet — see the Jira tab below">
+            <Info size={14} />
+          </span>
+        </h1>
       </header>
 
       {/* Stats strip */}
@@ -104,10 +177,10 @@ export default function TicketDetailPage() {
 
       {/* Panels */}
       <div className="tab-panel" role="tabpanel" id={`panel-${activeTab}`}>
-        {activeTab === 'jira' && <JiraPanel ticket={ticket} />}
+        {activeTab === 'jira' && <JiraPanel ticket={null} />}
         {activeTab === 'commits' && <CommitsPanel commits={commits} />}
         {activeTab === 'prs' && <PullRequestsPanel pullRequests={prs} commitCount={commits.length} />}
-        {activeTab === 'sonarqube' && <SonarQubePanel data={sonarqube} />}
+        {activeTab === 'sonarqube' && <SonarQubePanel data={SONARQUBE_NOT_CONNECTED} />}
       </div>
     </div>
   );

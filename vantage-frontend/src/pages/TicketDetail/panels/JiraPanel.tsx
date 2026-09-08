@@ -1,15 +1,30 @@
 import { useState } from 'react';
 import Avatar from '@/components/shared/Avatar';
+import EmptyState from '@/components/shared/EmptyState';
 import StatusPill from '@/components/shared/StatusPill';
 import { exactTime, priorityArrow, priorityClass, relativeTime } from '@/services/utils';
 import type { JiraTicket } from '@/types';
 
 interface JiraPanelProps {
-  ticket: JiraTicket;
+  ticket: JiraTicket | null;
 }
 
+// ticket is null whenever Jira isn't wired for this session (it's
+// frontend-only OAuth PKCE — see the integration plan's Step 2 — and
+// hasn't been built yet). Showing an honest empty state here instead of
+// a fabricated ticket summary.
 export default function JiraPanel({ ticket }: JiraPanelProps) {
   const [showFullDescription, setShowFullDescription] = useState(false);
+
+  if (!ticket) {
+    return (
+      <EmptyState
+        title="Jira isn't connected yet"
+        subtitle="Log in with Atlassian to see this ticket's summary, assignee, status, and priority."
+      />
+    );
+  }
+
   const descriptionIsLong = ticket.description.length > 200;
 
   return (

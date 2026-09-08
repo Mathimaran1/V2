@@ -1,9 +1,25 @@
+// AWS CodeCommit's GetCommit returns commit.author.date in git's raw
+// author-date format ("<epoch seconds> <+HHMM offset>", e.g.
+// "1788625651 +0530") — confirmed against real API output, not ISO 8601.
+// `new Date("1788625651 +0530")` is Invalid Date, so this must be parsed
+// explicitly before falling back to standard Date parsing for the ISO
+// strings still-mock data (SonarQube, Jira) uses.
+const GIT_RAW_DATE_RE = /^(\d+)\s+[+-]\d{4}$/;
+
+function parseTimestamp(timestamp: string): Date {
+  const match = GIT_RAW_DATE_RE.exec(timestamp.trim());
+  if (match) {
+    return new Date(Number(match[1]) * 1000);
+  }
+  return new Date(timestamp);
+}
+
 /**
  * Format a timestamp as relative time (e.g. "12m ago", "2h ago", "3d ago").
  */
 export function relativeTime(timestamp: string): string {
   const now = Date.now();
-  const then = new Date(timestamp).getTime();
+  const then = parseTimestamp(timestamp).getTime();
   const diffMs = now - then;
   const diffMins = Math.floor(diffMs / 60_000);
 
@@ -27,7 +43,7 @@ export function relativeTime(timestamp: string): string {
  * Format a timestamp as an exact date-time string for tooltips.
  */
 export function exactTime(timestamp: string): string {
-  return new Date(timestamp).toLocaleString('en-US', {
+  return parseTimestamp(timestamp).toLocaleString('en-US', {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });

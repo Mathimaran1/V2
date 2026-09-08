@@ -1,11 +1,12 @@
 import type {
-  Commit,
+  CommitRecord,
   DeveloperDetail,
   Developer,
   JiraTicket,
   PaginatedResponse,
   PullRequest,
   SonarQubeData,
+  TicketSummary,
   TierDistribution,
   TopUser,
 } from '@/types';
@@ -49,19 +50,38 @@ export async function fetchTicketDetail(ticketId: string): Promise<JiraTicket> {
 }
 
 // =====================================================
-// Commits (via backend → CodeCommit, reads real trailers)
+// Real ticket summaries (via backend → DuckDB/Parquet over CodeCommit —
+// NOT Jira; see TicketSummary's own doc comment). Separate from
+// fetchTickets/fetchTicketDetail above, which are for the eventual
+// Jira-backed /api/tickets endpoint once Step 2 lands — this hits the
+// same URL shape but a genuinely different, already-real endpoint.
 // =====================================================
 
-export async function fetchCommits(ticketId: string): Promise<Commit[]> {
-  return fetchJson(`${API_BASE}/commits/${ticketId}`);
+export async function fetchTicketsSummary(): Promise<TicketSummary[]> {
+  const res = await fetchJson<{ tickets: TicketSummary[] }>(`${API_BASE}/tickets`);
+  return res.tickets;
+}
+
+export async function fetchTicketSummary(ticketId: string): Promise<TicketSummary> {
+  return fetchJson(`${API_BASE}/tickets/${ticketId}`);
 }
 
 // =====================================================
-// Pull Requests (via backend → CodeCommit)
+// Commits (via backend → DuckDB/Parquet over CodeCommit, real trailers)
+// =====================================================
+
+export async function fetchCommits(ticketId: string): Promise<CommitRecord[]> {
+  const res = await fetchJson<{ commits: CommitRecord[] }>(`${API_BASE}/commits/${ticketId}`);
+  return res.commits;
+}
+
+// =====================================================
+// Pull Requests (via backend → DuckDB/Parquet over CodeCommit)
 // =====================================================
 
 export async function fetchPullRequests(ticketId: string): Promise<PullRequest[]> {
-  return fetchJson(`${API_BASE}/pullrequests/${ticketId}`);
+  const res = await fetchJson<{ pullRequests: PullRequest[] }>(`${API_BASE}/pullrequests/${ticketId}`);
+  return res.pullRequests;
 }
 
 // =====================================================
@@ -112,7 +132,7 @@ export async function fetchTopUsers(limit = 5): Promise<TopUser[]> {
 // take max Kiro-Credits per episode, sum across episodes
 // =====================================================
 
-export function computeCreditsUsed(commits: Commit[]): number {
+export function computeCreditsUsed(commits: { kiroEpisode: string | null; kiroCredits: number | null }[]): number {
   const episodeMaxMap = new Map<string, number>();
 
   for (const c of commits) {
