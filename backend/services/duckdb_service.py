@@ -2,6 +2,15 @@
 Local-only DuckDB queries against the Parquet files scripts/refresh_data.py
 writes (data/commits.parquet, data/pullrequests.parquet).
 
+Both files hold EVERY tracked ticket combined, not one file per ticket —
+refresh_data.py merges each ticket's fresh rows in without disturbing any
+other ticket's existing rows (see that script). Every function below
+still takes a single ticket_id and filters down to just that ticket's
+rows via a plain SQL WHERE clause, so this scales to more tracked
+tickets over time with no change needed here at all — confirmed by
+running two real tickets (ANG-123, ANG-4571) through the same combined
+files and checking neither query leaks the other's rows.
+
 No AWS/Jira credentials are imported, read, or referenced anywhere in this
 module — it never talks to CodeCommit directly. It only ever reads the
 Parquet files on local disk that a prior run of scripts/refresh_data.py
@@ -35,6 +44,22 @@ _DATA_DIR = os.path.join(_BACKEND_DIR, "data")
 
 COMMITS_PARQUET = os.path.join(_DATA_DIR, "commits.parquet")
 PULLREQUESTS_PARQUET = os.path.join(_DATA_DIR, "pullrequests.parquet")
+TRACKED_TICKETS_FILE = os.path.join(_DATA_DIR, "tracked_tickets.txt")
+
+
+def list_tracked_tickets() -> list[str]:
+    """
+    Every ticket scripts/refresh_data.py has ever been asked to pull —
+    i.e. every ticket that may have rows in the combined Parquet files.
+    Reads data/tracked_tickets.txt directly (the same file
+    refresh_data.py's --all flag reads), not the Parquet files
+    themselves, since a ticket can be tracked with zero real commits/PRs
+    and still belong in this list.
+    """
+    if not os.path.exists(TRACKED_TICKETS_FILE):
+        return []
+    with open(TRACKED_TICKETS_FILE) as f:
+        return [line.strip() for line in f if line.strip()]
 
 
 def get_ticket_credits(ticket_id: str) -> float:
@@ -115,10 +140,10 @@ def get_pull_requests_for_ticket(ticket_id: str) -> list[dict]:
     So this filters on that stamped column, not anything CodeCommit
     itself returns.
 
-    Freshness: reflects the last scripts/refresh_data.py run — since
-    that run only ever wrote one ticket's PRs, a request for a
-    different ticket_id here correctly comes back empty rather than
-    silently returning stale/wrong-ticket data.
+    Freshness: reflects data/pullrequests.parquet as of whenever
+    scripts/refresh_data.py last ran for this ticket specifically — not
+    live, and not affected by when any OTHER tracked ticket was last
+    refreshed (each ticket's rows are merged in independently).
     """
     con = duckdb.connect()
     try:
