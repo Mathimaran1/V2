@@ -1,7 +1,7 @@
 """
-Vantage backend — FastAPI app matching vite.config.ts's proxy target
-(http://localhost:8000). Routes are added incrementally; see the chat
-writeup for which are real vs. not-yet-configured.
+AI-Dev-Observability backend — FastAPI app matching vite.config.ts's
+proxy target (http://localhost:8000). Routes are added incrementally;
+see the chat writeup for which are real vs. not-yet-configured.
 """
 
 from dotenv import load_dotenv
@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from routes import commits, developers, jira, pullrequests, refresh, tickets
 
-app = FastAPI(title="Vantage backend")
+app = FastAPI(title="AI-Dev-Observability backend")
 
 app.include_router(tickets.router)
 app.include_router(commits.router)

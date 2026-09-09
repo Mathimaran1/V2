@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import Avatar from '@/components/shared/Avatar';
 import EmptyState from '@/components/shared/EmptyState';
 import StatusPill from '@/components/shared/StatusPill';
@@ -93,12 +94,7 @@ export default function JiraPanel({ ticketId }: JiraPanelProps) {
 
   return (
     <div className="panel-jira">
-      <div className="jira-connected-bar">
-        <span className="text-muted">Connected to {getSiteName() ?? 'Jira'}</span>
-        <button className="header-btn" onClick={() => { logout(); setLoadState('logged-out'); }}>
-          Log out
-        </button>
-      </div>
+      <JiraConnectionBadge siteName={getSiteName() ?? 'Jira'} onLogout={() => { logout(); setLoadState('logged-out'); }} />
       <table className="detail-table" aria-label="Jira ticket details">
         <tbody>
           {/* Summary row removed 2026-09-09 — the Description section
@@ -208,6 +204,59 @@ export default function JiraPanel({ ticketId }: JiraPanelProps) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// Compact connection-status pill (green dot + org name + a caret that
+// reveals Log out), replacing the old full-width "Connected to X" bar +
+// separate always-visible button. Purely presentational — the OAuth
+// login/logout calls it's wired to (jiraAuth.ts) are unchanged.
+function JiraConnectionBadge({ siteName, onLogout }: { siteName: string; onLogout: () => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [menuOpen]);
+
+  return (
+    <div className="jira-connection-badge" ref={containerRef}>
+      <button
+        className="jira-connection-trigger"
+        onClick={() => setMenuOpen(open => !open)}
+        aria-haspopup="true"
+        aria-expanded={menuOpen}
+      >
+        <span className="jira-connection-dot" aria-hidden="true" />
+        <span className="jira-connection-org">{siteName}</span>
+        <ChevronDown size={14} className={`jira-connection-caret ${menuOpen ? 'open' : ''}`} />
+      </button>
+      {menuOpen && (
+        <div className="jira-connection-menu" role="menu">
+          <button
+            className="jira-connection-menu-item"
+            role="menuitem"
+            onClick={() => { setMenuOpen(false); onLogout(); }}
+          >
+            Log out
+          </button>
+        </div>
+      )}
     </div>
   );
 }

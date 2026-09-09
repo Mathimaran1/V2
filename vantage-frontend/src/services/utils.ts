@@ -26,6 +26,25 @@ export function timestampMs(timestamp: string): number {
 }
 
 /**
+ * One CSV field, quoted only when it actually needs it (contains a
+ * comma, quote, or newline) — RFC 4180.
+ */
+export function csvField(value: string | number): string {
+  const s = String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * A full CSV string (CRLF line endings, trailing CRLF) from a header row
+ * plus data rows, each field escaped via csvField — shared by every
+ * page's Export button so the file format never quietly drifts between
+ * them.
+ */
+export function rowsToCsv(header: string[], rows: (string | number)[][]): string {
+  return [header, ...rows].map(row => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
+
+/**
  * Format a timestamp as relative time (e.g. "12m ago", "2h ago", "3d ago").
  */
 export function relativeTime(timestamp: string): string {

@@ -3,10 +3,30 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Pagination from '@/components/shared/Pagination';
 import { fetchDevelopers } from '@/services/api';
-import { formatTier, tierColor } from '@/services/utils';
+import { formatTier, rowsToCsv, tierColor } from '@/services/utils';
 import type { Developer, TierDistribution } from '@/types';
 
 type DaysWindow = 1 | 30 | 90;
+
+// Exports exactly the rows currently visible in the (search/tier-)
+// filtered, sorted table — every matching developer, not just the
+// current page — using the same real Developer data the table itself
+// renders. The "Credits used" column label carries the currently-
+// selected period (1/30/90 days), same as the table header, so the
+// file is self-describing even opened without the page in front of you.
+function developersToCsv(developers: Developer[], days: DaysWindow): string {
+  const rows = developers.map(d => [
+    d.name,
+    d.email,
+    formatTier(d.tier),
+    d.creditsUsed,
+    d.lifetimeCreditsUsed,
+  ]);
+  return rowsToCsv(
+    ['Developer name', 'Email', 'Kiro tier', `Credits used (last ${days} day${days === 1 ? '' : 's'})`, 'Lifetime credits'],
+    rows,
+  );
+}
 
 // The only two numeric columns worth sorting by — credits for the
 // selected period, and the all-time lifetime total. Defaults to
@@ -120,6 +140,23 @@ export default function UsersPage() {
     setPage(1);
   }, []);
 
+  // Same bug as the Overview page's Export button (a separate button on
+  // a separate page — this one was never wired up either): no onClick
+  // at all, so clicking it did nothing. Exports every currently
+  // filtered+sorted developer (not just the current page) as a real CSV.
+  const handleExport = useCallback(() => {
+    const csv = developersToCsv(sorted, days);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ai-dev-observability-developers-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [sorted, days]);
+
   return (
     <div className="page-users">
       {/* Header */}
@@ -129,7 +166,7 @@ export default function UsersPage() {
           <p className="page-subtitle">Monitor developer adoption and credit usage across your team.</p>
         </div>
         <div className="page-header-right">
-          <button className="header-btn" aria-label="Export">
+          <button className="header-btn" aria-label="Export" onClick={handleExport}>
             <Download size={16} />
             <span>Export</span>
           </button>

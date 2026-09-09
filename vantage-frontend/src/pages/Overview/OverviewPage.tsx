@@ -4,16 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import Avatar from '@/components/shared/Avatar';
 import Pagination from '@/components/shared/Pagination';
 import { fetchTicketsSummary } from '@/services/api';
-import { exactTime, relativeTime } from '@/services/utils';
+import { exactTime, relativeTime, rowsToCsv } from '@/services/utils';
 import type { TicketSummary } from '@/types';
-
-// One CSV field, quoted only when it actually needs it (contains a
-// comma, quote, or newline) — RFC 4180. Ticket IDs/counts never need
-// quoting in practice, but this doesn't assume that.
-function csvField(value: string | number): string {
-  const s = String(value);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 // Exports exactly the rows currently visible in the (search-)filtered
 // table — every matching ticket, not just the current page — using the
@@ -23,7 +15,6 @@ function csvField(value: string | number): string {
 // run through the same exactTime() the table's tooltip uses rather than
 // dumped raw.
 function ticketsToCsv(tickets: TicketSummary[]): string {
-  const header = ['Ticket ID', 'Commits', 'Pull requests', 'Credits used', 'Last commit'];
   const rows = tickets.map(t => [
     t.ticketId,
     t.commitCount,
@@ -31,7 +22,7 @@ function ticketsToCsv(tickets: TicketSummary[]): string {
     t.creditsUsed,
     t.lastCommitAt ? exactTime(t.lastCommitAt) : '',
   ]);
-  return [header, ...rows].map(row => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+  return rowsToCsv(['Ticket ID', 'Commits', 'Pull requests', 'Credits used', 'Last commit'], rows);
 }
 
 export default function OverviewPage() {
@@ -83,7 +74,7 @@ export default function OverviewPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `vantage-tickets-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `ai-dev-observability-tickets-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

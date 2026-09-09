@@ -11,7 +11,7 @@ export default function Sidebar() {
             <path d="M8 20V8l6 4-6 4zm6-4l6 4V8l-6 4z" fill="white" />
           </svg>
           <div className="sidebar-brand-text">
-            <span className="sidebar-brand-name">Vantage</span>
+            <span className="sidebar-brand-name">AI-Dev-Observability</span>
             <span className="sidebar-brand-sub">AI Development Observability</span>
           </div>
         </div>

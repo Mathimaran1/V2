@@ -6,6 +6,12 @@
  * Scopes requested below must exactly match what's actually configured
  * on the "Vantage-Frontend" Atlassian app (Permissions tab → Jira API →
  * Configure) — read:jira-work, read:project:jira, read:user:jira.
+ * "Vantage-Frontend" is that Atlassian app's real, currently-registered
+ * name in Atlassian's own console — this product was renamed to
+ * AI-Dev-Observability 2026-09-09, but the OAuth app itself wasn't
+ * (renaming it there is a separate, external action, not a frontend
+ * code change); this comment names the real app on purpose, not a
+ * missed rename.
  * read:jira-work (classic scope) is required specifically because
  * GET /rest/api/3/issue/{issueIdOrKey} (see jiraApi.ts) is documented
  * in Atlassian's own OpenAPI spec as requiring that classic scope —

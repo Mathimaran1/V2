@@ -1,5 +1,5 @@
 /* =====================================================
-   Vantage — Global Styles
+   AI-Dev-Observability — Global Styles
    Dark navy sidebar, white content, blue accent (#378ADD),
    pill badges, 0.5px borders, card-based panels, sentence case.
    ===================================================== */
@@ -106,10 +106,16 @@ button {
 }
 
 .sidebar-brand-name {
-  font-size: 16px;
+  /* Was 16px/0.5px letter-spacing, sized for "Vantage" (7 chars) — the
+     220px sidebar (--sidebar-width) has ~150px left for this text after
+     the logo icon + gap + padding, and "AI-Dev-Observability" (21
+     chars) doesn't fit that at the old size without wrapping awkwardly
+     mid-word. Sized down + tightened instead of letting it wrap. */
+  font-size: 13px;
   font-weight: 700;
   color: #fff;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.2px;
+  line-height: 1.25;
 }
 
 .sidebar-brand-sub {
@@ -736,6 +742,89 @@ button {
   border-radius: var(--border-radius);
   padding: 20px;
   background: var(--color-white);
+}
+
+/* ---- Jira connection badge ---- */
+/* Replaces the old full-width "Connected to X" bar + separate always-
+   visible Log out button with a compact pill: a green status dot, the
+   org name, and a caret that reveals Log out on click. Logic (login/
+   logout calls) is unchanged — this is layout/visual only. */
+.jira-connection-badge {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 16px;
+}
+
+.jira-connection-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--border-radius-pill);
+  background: var(--color-white);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.jira-connection-trigger:hover {
+  border-color: var(--color-blue);
+}
+
+.jira-connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  flex-shrink: 0;
+}
+
+.jira-connection-org {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jira-connection-caret {
+  color: var(--color-text-muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.jira-connection-caret.open {
+  transform: rotate(180deg);
+}
+
+.jira-connection-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 120px;
+  background: var(--color-white);
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--border-radius-sm);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.jira-connection-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.jira-connection-menu-item:hover {
+  background: var(--color-bg);
 }
 
 /* ---- Detail Table (key-value pairs) ---- */
