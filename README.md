@@ -1,5 +1,11 @@
 # v1 — Kiro + Jira + AWS Usage/Credit Tracking
 
+> **Setting up the dashboard app (`backend/` + `vantage-frontend/`) on a
+> new machine?** See [SETUP.md](SETUP.md) — clone, install deps, fill in
+> your own `.env` from the provided `.env.example` files, and run both
+> servers. §5 below is a separate, optional piece: the git-hooks credit
+> tracking on a dev laptop.
+
 ## 1. What this is
 
 This project ties AI-assisted development spend to the work it actually
@@ -359,6 +365,12 @@ call was `getAccessibleAtlassianResources`, correctly returning
 with the right ID — no wrong guess, no self-correction needed.
 
 ## 5. Setup instructions
+
+This section is the git-hooks credit-tracking setup for a dev laptop
+that will *make* Kiro-tracked commits. If you're setting up the
+dashboard app that *reads* that data (`backend/` + `vantage-frontend/`),
+see [SETUP.md](SETUP.md) instead — the two are independent; you may only
+need one of them.
 
 ```bash
 git init                              # if not already a repo

@@ -128,6 +128,67 @@ def get_commits_for_ticket(ticket_id: str) -> list[dict]:
     return df.to_dict(orient="records")
 
 
+def get_all_commit_author_emails() -> set[str]:
+    """
+    Every distinct commit author email in the local Parquet cache
+    (data/commits.parquet), normalized (stripped, lowercased) — used by
+    routes/developers.py to check whether a real S3 usage-report
+    User_Email has any matching real CodeCommit authorEmail.
+
+    Real, confirmed limitation (2026-09-09): this cache only covers
+    whichever tickets scripts/refresh_data.py has been run for, not the
+    whole repo — checked directly against a live full-branch-history
+    CodeCommit walk (87 commits, one distinct author email,
+    gowthamaran006@gmail.com) and it matched exactly. A developer whose
+    real S3 email isn't in this set may still have real commits in an
+    untracked ticket or a different repo entirely — "no match" here
+    means "no match in what's cached locally", not "this person has
+    never committed anything, anywhere."
+    """
+    if not os.path.exists(COMMITS_PARQUET):
+        return set()
+    con = duckdb.connect()
+    try:
+        rows = con.execute(
+            f"SELECT DISTINCT authorEmail FROM read_parquet('{COMMITS_PARQUET}') WHERE authorEmail IS NOT NULL"
+        ).fetchall()
+    finally:
+        con.close()
+    return {r[0].strip().lower() for r in rows if r[0] and r[0].strip()}
+
+
+def get_commit_confidence_stats_for_email(email: str) -> dict:
+    """
+    Total commits and high-confidence commits (kiroConfidence == 'high')
+    across every tracked ticket, for one commit author email
+    (case-insensitive exact match against authorEmail).
+
+    Only meaningful when email is already known to be in
+    get_all_commit_author_emails() — used to turn a real match into an
+    actual coverage percentage (high-confidence commits / total
+    commits), rather than a boolean "matched or not".
+    """
+    if not os.path.exists(COMMITS_PARQUET):
+        return {"totalCommits": 0, "highConfidenceCommits": 0}
+    con = duckdb.connect()
+    try:
+        result = con.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN kiroConfidence = 'high' THEN 1 ELSE 0 END) AS high_confidence
+            FROM read_parquet('{COMMITS_PARQUET}')
+            WHERE LOWER(TRIM(authorEmail)) = ?
+            """,
+            [email.strip().lower()],
+        ).fetchone()
+    finally:
+        con.close()
+    total = int(result[0]) if result and result[0] is not None else 0
+    high = int(result[1]) if result and result[1] is not None else 0
+    return {"totalCommits": total, "highConfidenceCommits": high}
+
+
 def get_pull_requests_for_ticket(ticket_id: str) -> list[dict]:
     """
     All pull requests for a ticket, from data/pullrequests.parquet.

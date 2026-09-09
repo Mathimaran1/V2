@@ -1,11 +1,38 @@
-import { Bell, Calendar, Download, Search } from 'lucide-react';
+import { Bell, Download, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Avatar from '@/components/shared/Avatar';
 import Pagination from '@/components/shared/Pagination';
 import { fetchTicketsSummary } from '@/services/api';
-import { relativeTime } from '@/services/utils';
+import { exactTime, relativeTime } from '@/services/utils';
 import type { TicketSummary } from '@/types';
+
+// One CSV field, quoted only when it actually needs it (contains a
+// comma, quote, or newline) — RFC 4180. Ticket IDs/counts never need
+// quoting in practice, but this doesn't assume that.
+function csvField(value: string | number): string {
+  const s = String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// Exports exactly the rows currently visible in the (search-)filtered
+// table — every matching ticket, not just the current page — using the
+// same real TicketSummary data the table itself renders, so the file
+// can never disagree with what's on screen. lastCommitAt is CodeCommit's
+// raw author-date format (see TicketSummary's own doc comment), so it's
+// run through the same exactTime() the table's tooltip uses rather than
+// dumped raw.
+function ticketsToCsv(tickets: TicketSummary[]): string {
+  const header = ['Ticket ID', 'Commits', 'Pull requests', 'Credits used', 'Last commit'];
+  const rows = tickets.map(t => [
+    t.ticketId,
+    t.commitCount,
+    t.prCount,
+    t.creditsUsed,
+    t.lastCommitAt ? exactTime(t.lastCommitAt) : '',
+  ]);
+  return [header, ...rows].map(row => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
 
 export default function OverviewPage() {
   const navigate = useNavigate();
@@ -44,6 +71,25 @@ export default function OverviewPage() {
     setPage(1);
   }, []);
 
+  // Was previously a button with no onClick at all — clicking it did
+  // literally nothing (confirmed: no console error, no network request,
+  // no download event; there was simply no handler wired up). Exports
+  // every currently-filtered ticket (not just the current page) as a
+  // real CSV file via a Blob + temporary <a download>, matching exactly
+  // what's in the table above it.
+  const handleExport = useCallback(() => {
+    const csv = ticketsToCsv(filtered);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `vantage-tickets-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [filtered]);
+
   return (
     <div className="page-overview">
       {/* Header */}
@@ -53,11 +99,7 @@ export default function OverviewPage() {
           <p className="page-subtitle">End-to-end visibility from Jira ticket to production.</p>
         </div>
         <div className="page-header-right">
-          <button className="header-btn" aria-label="Date range">
-            <Calendar size={16} />
-            <span>May 11 – May 17, 2025</span>
-          </button>
-          <button className="header-btn" aria-label="Export">
+          <button className="header-btn" aria-label="Export" onClick={handleExport}>
             <Download size={16} />
             <span>Export</span>
           </button>

@@ -15,6 +15,17 @@ function parseTimestamp(timestamp: string): Date {
 }
 
 /**
+ * Real, comparable milliseconds for a timestamp in either of the two
+ * formats this app handles (see parseTimestamp above) — for sorting a
+ * column by actual time rather than by the display string (which
+ * relativeTime()'s "1w ago" buckets aren't precise enough for: two
+ * commits days apart can render the same bucket).
+ */
+export function timestampMs(timestamp: string): number {
+  return parseTimestamp(timestamp).getTime();
+}
+
+/**
  * Format a timestamp as relative time (e.g. "12m ago", "2h ago", "3d ago").
  */
 export function relativeTime(timestamp: string): string {

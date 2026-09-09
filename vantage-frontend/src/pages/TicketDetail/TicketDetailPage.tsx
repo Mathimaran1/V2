@@ -118,8 +118,8 @@ export default function TicketDetailPage() {
       <header className="ticket-header">
         <span className="ticket-id">{ticket.ticketId}</span>
         <h1 className="ticket-title">
-          Jira summary unavailable
-          <span className="stat-info-icon" title="Jira isn't connected yet — see the Jira tab below">
+          See Jira tab for summary
+          <span className="stat-info-icon" title="Log in with Atlassian on the Jira tab to see this ticket's real summary">
             <Info size={14} />
           </span>
         </h1>
@@ -177,7 +177,7 @@ export default function TicketDetailPage() {
 
       {/* Panels */}
       <div className="tab-panel" role="tabpanel" id={`panel-${activeTab}`}>
-        {activeTab === 'jira' && <JiraPanel ticket={null} />}
+        {activeTab === 'jira' && <JiraPanel ticketId={ticket.ticketId} />}
         {activeTab === 'commits' && <CommitsPanel commits={commits} />}
         {activeTab === 'prs' && <PullRequestsPanel pullRequests={prs} commitCount={commits.length} />}
         {activeTab === 'sonarqube' && <SonarQubePanel data={SONARQUBE_NOT_CONNECTED} />}

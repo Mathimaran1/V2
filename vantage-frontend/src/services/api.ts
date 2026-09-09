@@ -1,14 +1,11 @@
 import type {
   CommitRecord,
-  DeveloperDetail,
   Developer,
   JiraTicket,
   PaginatedResponse,
   PullRequest,
   SonarQubeData,
   TicketSummary,
-  TierDistribution,
-  TopUser,
 } from '@/types';
 
 const API_BASE = '/api';
@@ -93,37 +90,36 @@ export async function fetchSonarQube(ticketId: string): Promise<SonarQubeData> {
 }
 
 // =====================================================
-// Users / Developers (via backend → S3 usage reports)
+// Users / Developers (via backend → real S3 usage reports, joined
+// against real locally-cached CodeCommit author emails for
+// coveragePercent — see backend/routes/developers.py's own docstring
+// for the full, verified investigation behind why coveragePercent
+// currently comes back null for every real developer, and
+// s3_usage_service.py for the real schema/aggregation rules).
+//
+// No pagination/search/filter params here — the backend returns every
+// real developer in one call (145 of them, ~7s including 323 real S3
+// file downloads, cached server-side for 5 min) and the page filters/
+// paginates client-side, same as the mock data did before it.
+//
+// fetchDeveloperDetail/fetchTierDistribution/fetchTopUsers used to be
+// declared here pointing at /api/kiro-usage/... endpoints that were
+// never built and nothing called — removed rather than left as
+// dead code implying a backend that doesn't exist. Tier distribution
+// and top users are now derived client-side from this same real
+// developer list (see UsersPage.tsx) instead of separate endpoints.
 // =====================================================
 
-export async function fetchDevelopers(params: {
-  page?: number;
-  pageSize?: number;
-  search?: string;
-  tier?: string;
-  activity?: string;
-  coverage?: string;
-}): Promise<PaginatedResponse<Developer>> {
-  const query = new URLSearchParams();
-  if (params.page) query.set('page', String(params.page));
-  if (params.pageSize) query.set('pageSize', String(params.pageSize));
-  if (params.search) query.set('search', params.search);
-  if (params.tier) query.set('tier', params.tier);
-  if (params.activity) query.set('activity', params.activity);
-  if (params.coverage) query.set('coverage', params.coverage);
-  return fetchJson(`${API_BASE}/kiro-usage/developers?${query.toString()}`);
+export interface DevelopersResponse {
+  developers: Developer[];
+  totalCount: number;
 }
 
-export async function fetchDeveloperDetail(developerId: string): Promise<DeveloperDetail> {
-  return fetchJson(`${API_BASE}/kiro-usage/developers/${developerId}`);
-}
-
-export async function fetchTierDistribution(): Promise<TierDistribution[]> {
-  return fetchJson(`${API_BASE}/kiro-usage/tier-distribution`);
-}
-
-export async function fetchTopUsers(limit = 5): Promise<TopUser[]> {
-  return fetchJson(`${API_BASE}/kiro-usage/top-users?limit=${limit}`);
+// days must be one of 1, 30, 90 — matches backend/routes/developers.py's
+// _ALLOWED_DAYS exactly (a value outside that set gets a real 400, not
+// silently clamped).
+export async function fetchDevelopers(days: 1 | 30 | 90 = 30): Promise<DevelopersResponse> {
+  return fetchJson(`${API_BASE}/developers?days=${days}`);
 }
 
 // =====================================================

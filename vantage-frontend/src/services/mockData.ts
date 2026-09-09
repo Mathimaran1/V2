@@ -371,16 +371,16 @@ const mockSonarQube: SonarQubeData = {
 // =====================================================
 
 const mockDevelopers: Developer[] = [
-  { id: '1', name: 'Rohit Sharma', email: 'rohit@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 247.8, creditsTrend: 8, activeSince: '2024-11-01', lastActive: '2025-05-17', coveragePercent: 94, ticketsWorkedOn: 23 },
-  { id: '2', name: 'Priya Nair', email: 'priya@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 156.3, creditsTrend: -5, activeSince: '2024-12-15', lastActive: '2025-05-17', coveragePercent: 87, ticketsWorkedOn: 18 },
-  { id: '3', name: 'Arjun Mehta', email: 'arjun@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 312.5, creditsTrend: 12, activeSince: '2024-10-20', lastActive: '2025-05-17', coveragePercent: 91, ticketsWorkedOn: 28 },
-  { id: '4', name: 'Sneha Iyer', email: 'sneha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 83.2, creditsTrend: 3, activeSince: '2025-01-10', lastActive: '2025-05-16', coveragePercent: 78, ticketsWorkedOn: 12 },
-  { id: '5', name: 'Karan Verma', email: 'karan@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 27.4, creditsTrend: -2, activeSince: '2025-03-01', lastActive: '2025-05-15', coveragePercent: 65, ticketsWorkedOn: 6 },
-  { id: '6', name: 'Ananya Joshi', email: 'ananya@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 198.7, creditsTrend: 6, activeSince: '2024-11-15', lastActive: '2025-05-17', coveragePercent: 89, ticketsWorkedOn: 21 },
-  { id: '7', name: 'Neha Verma', email: 'neha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 112.9, creditsTrend: 1, activeSince: '2025-01-05', lastActive: '2025-05-17', coveragePercent: 82, ticketsWorkedOn: 15 },
-  { id: '8', name: 'Aman Gupta', email: 'aman@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 64.1, creditsTrend: 4, activeSince: '2025-02-20', lastActive: '2025-05-16', coveragePercent: 71, ticketsWorkedOn: 9 },
-  { id: '9', name: 'Rekha Nair', email: 'rekha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 15.6, creditsTrend: -10, activeSince: '2025-04-01', lastActive: '2025-05-14', coveragePercent: 55, ticketsWorkedOn: 4 },
-  { id: '10', name: 'Reha Sharma', email: 'reha@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 221.3, creditsTrend: 7, activeSince: '2024-10-15', lastActive: '2025-05-17', coveragePercent: 92, ticketsWorkedOn: 25 },
+  { id: '1', name: 'Rohit Sharma', email: 'rohit@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 247.8, lifetimeCreditsUsed: 1115.1, creditsTrend: 8, activeSince: '2024-11-01', lastActive: '2025-05-17', coveragePercent: 94, ticketsWorkedOn: 23 },
+  { id: '2', name: 'Priya Nair', email: 'priya@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 156.3, lifetimeCreditsUsed: 703.4, creditsTrend: -5, activeSince: '2024-12-15', lastActive: '2025-05-17', coveragePercent: 87, ticketsWorkedOn: 18 },
+  { id: '3', name: 'Arjun Mehta', email: 'arjun@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 312.5, lifetimeCreditsUsed: 1406.2, creditsTrend: 12, activeSince: '2024-10-20', lastActive: '2025-05-17', coveragePercent: 91, ticketsWorkedOn: 28 },
+  { id: '4', name: 'Sneha Iyer', email: 'sneha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 83.2, lifetimeCreditsUsed: 374.4, creditsTrend: 3, activeSince: '2025-01-10', lastActive: '2025-05-16', coveragePercent: 78, ticketsWorkedOn: 12 },
+  { id: '5', name: 'Karan Verma', email: 'karan@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 27.4, lifetimeCreditsUsed: 123.3, creditsTrend: -2, activeSince: '2025-03-01', lastActive: '2025-05-15', coveragePercent: 65, ticketsWorkedOn: 6 },
+  { id: '6', name: 'Ananya Joshi', email: 'ananya@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 198.7, lifetimeCreditsUsed: 894.1, creditsTrend: 6, activeSince: '2024-11-15', lastActive: '2025-05-17', coveragePercent: 89, ticketsWorkedOn: 21 },
+  { id: '7', name: 'Neha Verma', email: 'neha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 112.9, lifetimeCreditsUsed: 508.1, creditsTrend: 1, activeSince: '2025-01-05', lastActive: '2025-05-17', coveragePercent: 82, ticketsWorkedOn: 15 },
+  { id: '8', name: 'Aman Gupta', email: 'aman@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 64.1, lifetimeCreditsUsed: 288.4, creditsTrend: 4, activeSince: '2025-02-20', lastActive: '2025-05-16', coveragePercent: 71, ticketsWorkedOn: 9 },
+  { id: '9', name: 'Rekha Nair', email: 'rekha@example.com', avatarUrl: '', tier: 'PRO', creditsUsed: 15.6, lifetimeCreditsUsed: 70.2, creditsTrend: -10, activeSince: '2025-04-01', lastActive: '2025-05-14', coveragePercent: 55, ticketsWorkedOn: 4 },
+  { id: '10', name: 'Reha Sharma', email: 'reha@example.com', avatarUrl: '', tier: 'PRO_PLUS', creditsUsed: 221.3, lifetimeCreditsUsed: 995.9, creditsTrend: 7, activeSince: '2024-10-15', lastActive: '2025-05-17', coveragePercent: 92, ticketsWorkedOn: 25 },
 ];
 
 // =====================================================
@@ -419,7 +419,7 @@ export function getMockTickets(params: {
   let items = [...mockTickets];
   if (params.search) {
     const s = params.search.toLowerCase();
-    items = items.filter(t => t.key.toLowerCase().includes(s) || t.summary.toLowerCase().includes(s) || t.assignee.name.toLowerCase().includes(s));
+    items = items.filter(t => t.key.toLowerCase().includes(s) || t.summary.toLowerCase().includes(s) || (t.assignee?.name.toLowerCase().includes(s) ?? false));
   }
   if (params.status && params.status !== 'all') {
     items = items.filter(t => t.status.name.toLowerCase().replace(/\s+/g, '-') === params.status!.toLowerCase().replace(/\s+/g, '-'));

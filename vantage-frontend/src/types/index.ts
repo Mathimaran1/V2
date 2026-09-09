@@ -6,8 +6,11 @@ export interface JiraTicket {
   id: string;
   key: string;
   summary: string;
-  assignee: Person;
-  reporter: Person;
+  // Real Jira issues can genuinely have no assignee, and no visible
+  // reporter (permission-dependent) — null here is a real state, not a
+  // loading placeholder.
+  assignee: Person | null;
+  reporter: Person | null;
   status: TicketStatus;
   priority: TicketPriority;
   issueType: IssueType;
@@ -193,12 +196,25 @@ export interface Developer {
   email: string;
   avatarUrl: string;
   tier: string; // DATA-DRIVEN — not hardcoded
-  creditsUsed: number;
-  creditsTrend: number; // percentage vs previous period, positive = up
-  activeSince: string;
+  creditsUsed: number; // real, date-filtered by whichever period is currently selected — see fetchDevelopers(days)
+  lifetimeCreditsUsed: number; // real, all-time total — never affected by the selected period
+  // Period-over-period trend needs a real "current vs previous period"
+  // comparison, which needs working date-range filtering — not wired
+  // up yet (see the Overview/Users date picker). Genuinely not
+  // computable right now, so this is undefined rather than a fake 0 —
+  // check for undefined before rendering a trend arrow, don't assume
+  // it's always present the way the old mock data did.
+  creditsTrend?: number;
+  activeSince: string; // earliest date this email appears in the real S3 usage reports fetched — not an account-creation date
   lastActive: string;
-  coveragePercent: number;
-  ticketsWorkedOn: number;
+  // null when no real match exists between this email and any known
+  // CodeCommit commit author email — see coverageNote for the real
+  // reason, and backend/routes/developers.py's docstring for the full
+  // investigation. Never render a fabricated percentage when this is
+  // null; show the honest "not available" state instead.
+  coveragePercent: number | null;
+  coverageNote?: string;
+  ticketsWorkedOn?: number;
 }
 
 export interface DeveloperDetail extends Developer {

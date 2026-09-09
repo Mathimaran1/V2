@@ -358,6 +358,37 @@ button {
   background: var(--color-bg);
 }
 
+.th-sortable {
+  padding: 0;
+}
+
+.th-sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.th-sort-btn:hover {
+  color: var(--color-text);
+}
+
+.th-sort-icon {
+  flex-shrink: 0;
+}
+
+.th-sort-icon-inactive {
+  opacity: 0.4;
+}
+
 .table-row-clickable.expanded {
   background: var(--color-blue-light);
 }

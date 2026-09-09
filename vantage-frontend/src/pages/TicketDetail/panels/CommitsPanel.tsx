@@ -1,12 +1,25 @@
-import { ChevronDown, ChevronUp, Copy, Info } from 'lucide-react';
-import { useState } from 'react';
-import Avatar from '@/components/shared/Avatar';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Copy, Info } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import EmptyState from '@/components/shared/EmptyState';
-import { relativeTime } from '@/services/utils';
+import { relativeTime, timestampMs } from '@/services/utils';
 import type { CommitRecord } from '@/types';
 
 interface CommitsPanelProps {
   commits: CommitRecord[];
+}
+
+const JIRA_VALIDATED_TOOLTIP =
+  '"Yes" = this ticket was confirmed real against live Jira at commit time. ' +
+  '"No" = validation was attempted but did not succeed (e.g. Jira was unreachable, or the check was skipped). ' +
+  '"N/A" = this commit predates this tracking field being added to the project.';
+
+type ConfidenceFilter = 'all' | 'high' | 'low';
+type JiraValidatedFilter = 'all' | 'yes' | 'no' | 'n/a';
+
+function jiraValidatedLabel(value: boolean | null): 'Yes' | 'No' | 'N/A' {
+  if (value === true) return 'Yes';
+  if (value === false) return 'No';
+  return 'N/A';
 }
 
 // AWS CodeCommit's GetCommit has no diff-stats, branch, or secret-scan
@@ -17,6 +30,29 @@ interface CommitsPanelProps {
 // than filled with fabricated zeros or a fake "clean" status.
 export default function CommitsPanel({ commits }: CommitsPanelProps) {
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const [confidenceFilter, setConfidenceFilter] = useState<ConfidenceFilter>('all');
+  const [jiraValidatedFilter, setJiraValidatedFilter] = useState<JiraValidatedFilter>('all');
+  // The backend returns commits oldest-first (see duckdb_service.py's
+  // get_commits_for_ticket — it walks CodeCommit newest->oldest from
+  // HEAD then reverses, to match the real API's own convention), so
+  // without a real sort here the most recent work is buried at the
+  // bottom of a long ticket's commit list. Defaulting to descending
+  // (most recent first) instead — same "highest/most-relevant first"
+  // default already used for Users page's credit columns.
+  const [timestampSortDirection, setTimestampSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  const filteredCommits = useMemo(() => {
+    return commits.filter(commit => {
+      if (confidenceFilter !== 'all' && commit.kiroConfidence !== confidenceFilter) return false;
+      if (jiraValidatedFilter !== 'all' && jiraValidatedLabel(commit.kiroJiraValidated).toLowerCase() !== jiraValidatedFilter) return false;
+      return true;
+    });
+  }, [commits, confidenceFilter, jiraValidatedFilter]);
+
+  const sortedCommits = useMemo(() => {
+    const dir = timestampSortDirection === 'asc' ? 1 : -1;
+    return [...filteredCommits].sort((a, b) => (timestampMs(a.timestamp) - timestampMs(b.timestamp)) * dir);
+  }, [filteredCommits, timestampSortDirection]);
 
   if (commits.length === 0) {
     return <EmptyState title="No commits found for this ticket" />;
@@ -28,6 +64,33 @@ export default function CommitsPanel({ commits }: CommitsPanelProps) {
 
   return (
     <div className="panel-commits">
+      <div className="filter-bar">
+        <select
+          className="filter-select"
+          value={confidenceFilter}
+          onChange={e => setConfidenceFilter(e.target.value as ConfidenceFilter)}
+          aria-label="Filter by confidence"
+        >
+          <option value="all">Confidence: All</option>
+          <option value="high">Confidence: High</option>
+          <option value="low">Confidence: Low</option>
+        </select>
+        <select
+          className="filter-select"
+          value={jiraValidatedFilter}
+          onChange={e => setJiraValidatedFilter(e.target.value as JiraValidatedFilter)}
+          aria-label="Filter by Jira ticket validated"
+        >
+          <option value="all">Jira ticket validated: All</option>
+          <option value="yes">Jira ticket validated: Yes</option>
+          <option value="no">Jira ticket validated: No</option>
+          <option value="n/a">Jira ticket validated: N/A</option>
+        </select>
+      </div>
+
+      {filteredCommits.length === 0 ? (
+        <EmptyState title="No commits match the selected filters" />
+      ) : (
       <table className="data-table commits-table" aria-label="Commits">
         <thead>
           <tr>
@@ -35,12 +98,25 @@ export default function CommitsPanel({ commits }: CommitsPanelProps) {
             <th>Message</th>
             <th>Author</th>
             <th>Confidence</th>
-            <th>Timestamp</th>
+            <th
+              className="th-sortable"
+              aria-sort={timestampSortDirection === 'asc' ? 'ascending' : 'descending'}
+            >
+              <button
+                className="th-sort-btn"
+                onClick={() => setTimestampSortDirection(d => (d === 'asc' ? 'desc' : 'asc'))}
+              >
+                Timestamp
+                {timestampSortDirection === 'asc'
+                  ? <ArrowUp size={13} className="th-sort-icon" />
+                  : <ArrowDown size={13} className="th-sort-icon" />}
+              </button>
+            </th>
             <th aria-hidden="true"></th>
           </tr>
         </thead>
         <tbody>
-          {commits.map(commit => (
+          {sortedCommits.map(commit => (
             <>
               <tr
                 key={commit.hash}
@@ -50,12 +126,7 @@ export default function CommitsPanel({ commits }: CommitsPanelProps) {
               >
                 <td className="cell-hash">{commit.hash}</td>
                 <td className="cell-summary">{commit.subject.length > 40 ? commit.subject.slice(0, 40) + '...' : commit.subject}</td>
-                <td className="cell-author">
-                  <div className="assignee-cell">
-                    <Avatar name={commit.author} size={24} />
-                    <span>{commit.author}</span>
-                  </div>
-                </td>
+                <td className="cell-author">{commit.author}</td>
                 <td>
                   {commit.kiroConfidence && (
                     <span className={`pill confidence-${commit.kiroConfidence}`}>
@@ -116,12 +187,13 @@ export default function CommitsPanel({ commits }: CommitsPanelProps) {
                             <td>{commit.kiroSession ?? 'N/A'}</td>
                           </tr>
                           <tr>
-                            <th scope="row">Jira ticket validated</th>
-                            <td>
-                              {commit.kiroJiraValidated === true && 'Yes'}
-                              {commit.kiroJiraValidated === false && 'No'}
-                              {commit.kiroJiraValidated === null && 'N/A'}
-                            </td>
+                            <th scope="row">
+                              Jira ticket validated
+                              <span className="stat-info-icon" title={JIRA_VALIDATED_TOOLTIP}>
+                                <Info size={14} />
+                              </span>
+                            </th>
+                            <td>{jiraValidatedLabel(commit.kiroJiraValidated)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -133,6 +205,7 @@ export default function CommitsPanel({ commits }: CommitsPanelProps) {
           ))}
         </tbody>
       </table>
+      )}
     </div>
   );
 }
