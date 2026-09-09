@@ -175,7 +175,7 @@ function RecentCommitsList({ commits }: { commits: Commit[] }) {
                 <tbody>
                   <tr><th scope="row">Full hash</th><td className="cell-hash-full">{c.hash}</td></tr>
                   <tr><th scope="row">Repository</th><td>{c.repositoryName}</td></tr>
-                  <tr><th scope="row">Credits</th><td>{c.kiroCredits != null ? `${c.kiroCredits} credits` : 'N/A'}</td></tr>
+                  <tr><th scope="row">Credits</th><td>{c.kiroCredits ?? 0} credits</td></tr>
                   <tr><th scope="row">Files</th><td>{c.filesChanged.join(', ')}</td></tr>
                 </tbody>
               </table>

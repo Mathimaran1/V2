@@ -1,5 +1,7 @@
 """
-Real AWS CodeCommit access for HCM-ALCS-BE-AIDLC-TEST / v1-import.
+Real AWS CodeCommit access for HCM-ALCS-BE-AIDLC-TEST, across every
+branch in the repo (not just one hardcoded branch) — see
+_all_branch_head_commit_ids().
 
 Confirmed 2026-09-05, live against the real repo:
   - The base IAM user in AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY has NO
@@ -152,25 +154,39 @@ def _normalize_commit(raw: dict, ticket_id: str) -> dict | None:
     }
 
 
+def _all_branch_head_commit_ids(client, repo: str) -> list[str]:
+    """
+    Every branch's current HEAD commit id, so history-walking below covers
+    the entire repo instead of a single hardcoded branch — a ticket's
+    commits may land on any branch (e.g. v2 vs. v1-import), and CodeCommit
+    has no single "all commits" API, only per-branch heads to walk back
+    from.
+    """
+    branch_names = client.list_branches(repositoryName=repo)["branches"]
+    head_ids = []
+    for name in branch_names:
+        resp = client.get_branch(repositoryName=repo, branchName=name)
+        head_ids.append(resp["branch"]["commitId"])
+    return head_ids
+
+
 def get_commits_for_ticket(ticket_id: str, max_commits_walked: int = 500) -> list[dict]:
     """
-    Real CodeCommit call: walk the branch history from HEAD via
-    GetBranch + repeated GetCommit (following `parents`), collecting
-    every commit whose Kiro-Ticket trailer equals ticket_id.
+    Real CodeCommit call: walk history from every branch's HEAD via
+    ListBranches + GetBranch + repeated GetCommit (following `parents`),
+    collecting every commit whose Kiro-Ticket trailer equals ticket_id.
+    Commits reachable from more than one branch are only visited/counted
+    once (shared `seen` set below).
 
     Returns commits oldest-first (matches reading a ticket's work in the
     order it happened).
     """
     client = _get_codecommit_client()
     repo = os.environ["CODECOMMIT_REPO_NAME"]
-    branch = os.environ["CODECOMMIT_BRANCH"]
-
-    branch_resp = client.get_branch(repositoryName=repo, branchName=branch)
-    head_commit_id = branch_resp["branch"]["commitId"]
 
     matched: list[dict] = []
     seen: set[str] = set()
-    frontier = [head_commit_id]
+    frontier = _all_branch_head_commit_ids(client, repo)
     walked = 0
 
     while frontier and walked < max_commits_walked:

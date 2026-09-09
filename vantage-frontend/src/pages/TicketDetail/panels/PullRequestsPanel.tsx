@@ -167,7 +167,7 @@ export default function PullRequestsPanel({ pullRequests, commitCount }: PullReq
                           <tr>
                             <th scope="row">Kiro credits for this PR</th>
                             <td>
-                              {pr.kiroCredits != null ? `${pr.kiroCredits} credits` : 'N/A'}
+                              {pr.kiroCredits ?? 0} credits
                               <span
                                 className="stat-info-icon"
                                 title="Computed using max-per-episode-then-sum logic across this PR's commits"

@@ -9,7 +9,7 @@ interface CommitsPanelProps {
 }
 
 function creditsLabel(credits: number | null): string {
-  return credits != null ? `${credits} credits` : 'N/A';
+  return `${credits ?? 0} credits`;
 }
 
 // AWS CodeCommit's GetCommit has no diff-stats, branch, or secret-scan
